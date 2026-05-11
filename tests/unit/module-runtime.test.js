@@ -1,35 +1,5 @@
-// V11 Peer DAW/tests/unit/module-runtime.test.js
-// Unit tests for module runtime ABI
-
-const { describe, expect, test } = require('@jest/globals');
-
-// Mock createModuleManifest
-function createModuleManifest(config) {
-  return {
-    id: config.id,
-    name: config.name,
-    version: config.version,
-    apiVersion: config.apiVersion,
-    entry: config.entry,
-    capabilities: config.capabilities,
-    ports: config.ports,
-    dsp: config.dsp,
-  };
-}
-
-// Mock validateModuleManifest
-function validateModuleManifest(manifest) {
-  const errors = [];
-
-  if (manifest.capabilities?.worklet && !manifest.dsp?.worklet) {
-    errors.push('capabilities.worklet requires dsp.worklet');
-  }
-
-  return {
-    ok: errors.length === 0,
-    errors,
-  };
-}
+import { describe, expect, test } from '@jest/globals';
+import { createModuleManifest, validateModuleManifest } from '../../src/core/module-runtime.js';
 
 describe('module runtime ABI', () => {
   test('validates a hybrid ES module shell manifest with optional worklet and wasm DSP', () => {
@@ -44,10 +14,7 @@ describe('module runtime ABI', () => {
         inputs: [{ id: 'control', type: 'control' }],
         outputs: [{ id: 'audio', type: 'audio' }],
       },
-      dsp: {
-        worklet: './processor.worklet.js',
-        wasm: './field-recorder.wasm',
-      },
+      dsp: { worklet: './processor.worklet.js', wasm: './field-recorder.wasm' },
     });
 
     expect(validateModuleManifest(manifest)).toEqual({ ok: true, errors: [] });

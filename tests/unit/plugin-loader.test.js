@@ -1,22 +1,5 @@
-// V11 Peer DAW/tests/unit/plugin-loader.test.js
-// Unit tests for PluginLoader
-
-const { describe, expect, test } = require('@jest/globals');
-
-// Mock PluginLoader
-class MockPluginLoader {
-  constructor(config = {}) {
-    this.importModule = config.importModule || (() => ({}));
-  }
-
-  async load(path) {
-    const shell = await this.importModule(path);
-    return {
-      manifest: shell.manifest,
-      create: shell.create,
-    };
-  }
-}
+import { describe, expect, test } from '@jest/globals';
+import { PluginLoader } from '../../src/core/plugin-loader.js';
 
 describe('PluginLoader', () => {
   test('loads a hybrid plugin from an ES module shell and validates its manifest', async () => {
@@ -33,7 +16,7 @@ describe('PluginLoader', () => {
       },
       create: async () => ({ serialize: () => ({}) }),
     };
-    const loader = new MockPluginLoader({ importModule: async () => shell });
+    const loader = new PluginLoader({ importModule: async () => shell });
 
     const plugin = await loader.load('./field-recorder/index.js');
 

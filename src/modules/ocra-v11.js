@@ -236,10 +236,22 @@ export class OcraV11Module extends ModuleBase {
 
         if (c === '*') {
           bang = true;
-          if (y > 0) trig[y - 1][x] = true;
-          if (y + 1 < GH) trig[y + 1][x] = true;
-          if (x > 0) trig[y][x - 1] = true;
-          if (x + 1 < GW) trig[y + 1][x] = true;
+          if (y > 0) {
+            trig[y - 1][x] = true;
+            act[y - 1][x] = true;
+          }
+          if (y + 1 < GH) {
+            trig[y + 1][x] = true;
+            act[y + 1][x] = true;
+          }
+          if (x > 0) {
+            trig[y][x - 1] = true;
+            act[y][x - 1] = true;
+          }
+          if (x + 1 < GW) {
+            trig[y][x + 1] = true;
+            act[y][x + 1] = true;
+          }
           this.grid[y][x] = '.';
         } else if (c === 'D') {
           const r = Math.max(1, this.gv(x + 1, y) || 1);
@@ -295,7 +307,9 @@ export class OcraV11Module extends ModuleBase {
 
       const _f = this.noteFreq(n.note, n.oct);
       const g = this.rowGains[n.row];
-      g.gain.value = this.rowStates[n.row].vol;
+      if (g?.gain) {
+        g.gain.value = this.rowStates[n.row].vol;
+      }
 
       this.emitPacket(
         createMidiPacket('note-on', {
