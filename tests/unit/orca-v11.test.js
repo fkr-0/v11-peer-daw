@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/orca-v11.test.js
 // Unit tests for ORCA V11 module
 
-import { beforeEach, describe, expect, it } from '@jest/globals';
+const { beforeEach, describe, expect, it } = require('@jest/globals');
 
 // Mock ModuleBase and dependencies
 class MockModuleBase {
@@ -100,7 +100,8 @@ class TestOcraModule extends MockModuleBase {
   }
 
   toH(n) {
-    return n < 10 ? String(n) : String.fromCharCode(87 + n);
+    const v = n % 16;
+    return v < 10 ? String(v) : String.fromCharCode(87 + v);
   }
 
   noteFreq(nv, oct) {
@@ -111,7 +112,7 @@ class TestOcraModule extends MockModuleBase {
   loadGrid(g) {
     for (let y = 0; y < GH; y++) {
       for (let x = 0; x < GW; x++) {
-        this.grid[y][x] = g[y]?.[x] ? g[y][x] : '.';
+        this.grid[y][x] = g[y] && g[y][x] ? g[y][x] : '.';
       }
     }
   }
@@ -302,6 +303,7 @@ describe('ORCA V11 Module', () => {
     it('should trigger on frame 0 with no offset', () => {
       ocra.grid[0][0] = 'D';
       ocra.grid[0][1] = '1';
+      ocra.orcaFrame = 0; // Set frame to 0
 
       const result = ocra.runOrca();
 
