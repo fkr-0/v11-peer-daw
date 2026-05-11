@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V11 Peer DAW</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="starfield"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v12M6 12h12"/>
+          </svg>
+        </div>
+        <div>
+          <h1>V11 Peer DAW</h1>
+          <div class="subtitle">modular peer-to-peer audio workstation · autonomous modules · collaborative sessions</div>
+        </div>
+      </div>
+      <nav class="transport">
+        <span id="audioStatus" class="status-indicator">audio: cold</span>
+        <span id="peerStatus" class="status-indicator">peer: offline</span>
+        <button id="btnBootAudio" class="btn-primary">BOOT AUDIO</button>
+        <button id="btnStart">START CLOCK</button>
+        <button id="btnStop" class="btn-danger">STOP</button>
+      </nav>
+    </header>
+
+    <section class="workspace">
+      <aside class="panel module-palette">
+        <div>
+          <h2>Module Bay</h2>
+          <select id="addModule" aria-label="Add module">
+            <option value="">+ add autonomous module…</option>
+            <optgroup label="Timing & Control">
+              <option value="clock">Transport Clock · emits clock</option>
+              <option value="metronome">Metronome · audible click track</option>
+            </optgroup>
+            <optgroup label="Sequencers">
+              <option value="ocra">OCRA Grid · collaborative ORCA sequencer</option>
+              <option value="pianoroll">Piano Roll · midi-like control</option>
+              <option value="basicseq">Basic Sequencer · step sequencer</option>
+              <option value="arp">Arpeggiator · generative patterns</option>
+            </optgroup>
+            <optgroup label="Instruments">
+              <option value="synth">Basic Synth · foundational voice</option>
+              <option value="cleansynth">Clean Synth · polished midi voice</option>
+              <option value="sampler">Clean Sampler · sample playback</option>
+              <option value="multisampler">MultiSampler · slice-based sampling</option>
+            </optgroup>
+            <optgroup label="Effects">
+              <option value="reverb">Reverb · spatial ambience</option>
+              <option value="dubecho">Dub Echo · feedback delay</option>
+              <option value="tapeecho">Tape Echo · wow & flutter delay</option>
+              <option value="flanger">Flanger · jet sweep modulation</option>
+              <option value="phaser">Phaser · allpass sweep</option>
+            </optgroup>
+            <optgroup label="Utilities">
+              <option value="channel">Channel Strip · gain/pan/mute</option>
+              <option value="mixerdesk">Mixer Desk · master bus</option>
+              <option value="field">Field Recorder · capture audio</option>
+              <option value="beatlooper">Beat Looper · beat repeat effect</option>
+            </optgroup>
+            <optgroup label="Networking">
+              <option value="peer">Peer Bridge · broadcast control</option>
+            </optgroup>
+          </select>
+          <p class="microcopy">Modules advertise input/output ports. The patch bay routes JSON-safe midi/control packets. Audio modules feed the central mixer by default.</p>
+        </div>
+
+        <div class="peer-panel">
+          <h2>Peer Session</h2>
+          <input id="pilotName" class="mini-input" value="pilot" aria-label="Pilot name">
+          <div class="button-row">
+            <button id="btnConnectPeer" type="button">CONNECT</button>
+            <button id="btnCreateSession" type="button">SESSION</button>
+            <button id="btnSaveSnapshot" type="button">SNAP</button>
+          </div>
+          <p class="microcopy"><span id="peerCount">0 peers</span> · <span id="storageStatus">storage ready</span></p>
+          <p class="microcopy">identity → PeernetUserManager · network → PeernetSharedCore · sessions → PeernetSessionManager · storage → PeernetStorageManager</p>
+        </div>
+
+        <div class="session-panel">
+          <h2>Session Info</h2>
+          <div id="sessionCode" class="session-code"></div>
+          <div id="peerList" class="peer-list"></div>
+        </div>
+      </aside>
+
+      <section class="panel rack">
+        <div class="patch-canvas-container">
+          <div class="patch-canvas-header">
+            <h2>Visual Patch Canvas</h2>
+            <div class="patch-controls">
+              <button id="btnAutoPatch" title="Auto-patch new modules">Auto-patch</button>
+              <button id="btnClearRoutes" title="Clear all routes">Clear Routes</button>
+            </div>
+          </div>
+          <div class="patch-canvas-host" id="patchCanvas"></div>
+        </div>
+
+        <div class="rack-container">
+          <div class="rack-header">
+            <h2>Module Rack</h2>
+            <div class="rack-stats">
+              <span id="moduleCount">0 modules</span>
+              <span id="routeCount">0 routes</span>
+            </div>
+          </div>
+          <div class="modules" id="modules"></div>
+        </div>
+      </section>
+
+      <aside class="panel inspector resizable-mixer">
+        <h2>Master Mixer</h2>
+        <div class="mixer-strip" id="mixerStrip"></div>
+
+        <h2>Active Routes</h2>
+        <div class="routes-container">
+          <ol class="routes" id="routes"></ol>
+        </div>
+
+        <h2>Packet Monitor</h2>
+        <div class="event-log" id="eventLog"></div>
+
+        <div class="inspector-footer">
+          <p class="microcopy">Right-click modules for context menu. Drag ports to create routes. Alt+click to delete routes.</p>
+        </div>
+      </aside>
+    </section>
+
+    <footer class="footer">
+      <span>V11 Peer DAW · modular audio workstation · peer-to-peer collaboration</span>
+      <a href="./docs/ARCHITECTURE.md">architecture docs</a>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="./vendor/peernet/peernet-shared-core.js"></script>
+  <script src="./vendor/peernet/peernet-user-manager.js"></script>
+  <script src="./vendor/peernet/peernet-session-manager.js"></script>
+  <script src="./vendor/peernet/peernet-storage-manager.js"></script>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
