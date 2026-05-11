@@ -106,18 +106,26 @@ class TestOcraModule extends MockModuleBase {
 
   noteFreq(nv, oct) {
     const s = PENTA[nv % 5] + Math.floor(nv / 5) * 12;
-    return (440 * 2 ** ((oct + 1) * 12 + s - 69)) / 12;
+    // MIDI note: C4 is 60
+    // oct 3 -> C4 when nv=0
+    const midiNote = (oct + 2) * 12 + s;
+    return 440 * 2 ** ((midiNote - 69) / 12);
   }
 
   loadGrid(g) {
     for (let y = 0; y < GH; y++) {
       for (let x = 0; x < GW; x++) {
-        this.grid[y][x] = g[y] && g[y][x] ? g[y][x] : '.';
+        this.grid[y][x] = g[y]?.[x] ? g[y][x] : '.';
       }
     }
   }
 
   runOrca() {
+    // Guard clause for empty grid
+    if (!this.grid || this.grid.length === 0) {
+      return { act: [], notes: [] };
+    }
+
     const trig = [];
     const act = [];
     const notes = [];
@@ -127,35 +135,53 @@ class TestOcraModule extends MockModuleBase {
       act.push(new Array(GW).fill(false));
     }
 
+    // First pass: handle * operator (triggers neighbors)
+    for (let y = 0; y < GH; y++) {
+      for (let x = 0; x < GW; x++) {
+        const c = this.grid[y][x];
+        if (c === '*') {
+          // Mark the bang itself as active
+          act[y][x] = true;
+          // Trigger all neighbors (they get marked as active)
+          if (y > 0) act[y - 1][x] = true; // North
+          if (y + 1 < GH) act[y + 1][x] = true; // South
+          if (x > 0) act[y][x - 1] = true; // West
+          if (x + 1 < GW) act[y][x + 1] = true; // East
+          // Also mark them in trig for O operator
+          if (y > 0) trig[y - 1][x] = true;
+          if (y + 1 < GH) trig[y + 1][x] = true;
+          if (x > 0) trig[y][x - 1] = true;
+          if (x + 1 < GW) trig[y][x + 1] = true;
+          // Clear the bang
+          this.grid[y][x] = '.';
+        }
+      }
+    }
+
+    // Second pass: handle other operators
     for (let y = 0; y < GH; y++) {
       for (let x = 0; x < GW; x++) {
         const c = this.grid[y][x];
         if (c === '.' || c === '#') continue;
 
-        let bang = false;
-        const t = trig[y][x];
-
-        if (c === '*') {
-          bang = true;
-          if (y > 0) trig[y - 1][x] = true;
-          if (y + 1 < GH) trig[y + 1][x] = true;
-          if (x > 0) trig[y][x - 1] = true;
-          if (x + 1 < GW) trig[y][x + 1] = true;
-          this.grid[y][x] = '.';
-        } else if (c === 'D') {
+        if (c === 'D') {
           const r = Math.max(1, this.gv(x + 1, y) || 1);
           const off = this.gv(x - 1, y);
           const idx = this.orcaFrame - off;
           if (idx >= 0 && idx % r === 0) {
-            bang = true;
-            if (y + 1 < GH) trig[y + 1][x] = true;
+            act[y][x] = true;
+            if (y + 1 < GH) {
+              act[y + 1][x] = true; // Mark south as active
+              trig[y + 1][x] = true; // Also mark for O operator
+            }
           }
-        } else if (c === 'O' && t) {
+        } else if (c === 'O' && trig[y][x]) {
           const n = this.gv(x + 1, y);
           const o = this.gv(x, y + 1) || 3;
           notes.push({ note: n, oct: o, row: y });
-          bang = true;
+          act[y][x] = true;
         } else if (c === 'C') {
+          act[y][x] = true;
           const m = Math.max(1, this.gv(x + 1, y) || 8);
           const out = this.orcaFrame % m;
           if (y + 1 < GH) {
@@ -163,12 +189,8 @@ class TestOcraModule extends MockModuleBase {
             if (this.grid[y + 1][x] === '.' || this.isV(this.grid[y + 1][x])) {
               this.grid[y + 1][x] = h;
             }
-            trig[y + 1][x] = true;
           }
-          bang = true;
         }
-
-        act[y][x] = bang;
       }
     }
 

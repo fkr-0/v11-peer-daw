@@ -261,7 +261,7 @@ describe('Clock Module', () => {
 
     it('should handle multiple starts', () => {
       clock.start(mockContext);
-      const firstTimer = clock.timer;
+      const _firstTimer = clock.timer;
 
       clock.start(mockContext);
 
