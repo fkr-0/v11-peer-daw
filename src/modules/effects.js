@@ -65,10 +65,10 @@ export class DubEchoModule extends EffectModule {
     ];
   }
   build() {
-    const d = this.ctx.createDelay(2),
-      fb = this.ctx.createGain(),
-      f = this.ctx.createBiquadFilter(),
-      wet = this.ctx.createGain();
+    const d = this.ctx.createDelay(2);
+    const fb = this.ctx.createGain();
+    const f = this.ctx.createBiquadFilter();
+    const wet = this.ctx.createGain();
     d.delayTime.value = 0.38;
     fb.gain.value = 0.52;
     f.type = 'lowpass';
@@ -91,9 +91,9 @@ export class ReverbModule extends EffectModule {
     this.params = [{ key: 'wet', label: 'Wet ', min: 0, max: 1, step: 0.01 }];
   }
   build() {
-    const d1 = this.ctx.createDelay(1),
-      d2 = this.ctx.createDelay(1),
-      g = this.ctx.createGain();
+    const d1 = this.ctx.createDelay(1);
+    const d2 = this.ctx.createDelay(1);
+    const g = this.ctx.createGain();
     d1.delayTime.value = 0.07;
     d2.delayTime.value = 0.13;
     g.gain.value = 0.35;
@@ -117,9 +117,9 @@ export class FlangerModule extends EffectModule {
     ];
   }
   build() {
-    const d = this.ctx.createDelay(0.03),
-      lfo = this.ctx.createOscillator(),
-      depth = this.ctx.createGain();
+    const d = this.ctx.createDelay(0.03);
+    const lfo = this.ctx.createOscillator();
+    const depth = this.ctx.createGain();
     d.delayTime.value = 0.006;
     lfo.frequency.value = 0.22;
     depth.gain.value = 0.004;
@@ -143,9 +143,9 @@ export class PhaserModule extends EffectModule {
     ];
   }
   build() {
-    const a = this.ctx.createBiquadFilter(),
-      lfo = this.ctx.createOscillator(),
-      depth = this.ctx.createGain();
+    const a = this.ctx.createBiquadFilter();
+    const lfo = this.ctx.createOscillator();
+    const depth = this.ctx.createGain();
     a.type = 'allpass';
     a.frequency.value = 700;
     lfo.frequency.value = 0.18;
@@ -170,10 +170,10 @@ export class TapeEchoModule extends EffectModule {
     ];
   }
   build() {
-    const d = this.ctx.createDelay(2),
-      fb = this.ctx.createGain(),
-      lfo = this.ctx.createOscillator(),
-      depth = this.ctx.createGain();
+    const d = this.ctx.createDelay(2);
+    const fb = this.ctx.createGain();
+    const lfo = this.ctx.createOscillator();
+    const depth = this.ctx.createGain();
     d.delayTime.value = 0.44;
     fb.gain.value = 0.42;
     lfo.frequency.value = 0.8;
@@ -200,9 +200,9 @@ export class BpmBeatLooperModule extends EffectModule {
     ];
   }
   build() {
-    const d = this.ctx.createDelay(4),
-      fb = this.ctx.createGain(),
-      wet = this.ctx.createGain();
+    const d = this.ctx.createDelay(4);
+    const fb = this.ctx.createGain();
+    const wet = this.ctx.createGain();
     d.delayTime.value = 0.25;
     fb.gain.value = 0.65;
     wet.gain.value = 0.55;

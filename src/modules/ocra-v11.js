@@ -11,7 +11,7 @@ const OP_CHARS = 'DOCARMVEWNS';
 const SYNTHS = ['saw', 'sin', 'kick', 'snare', 'hihat', 'bass'];
 
 // Operator Definitions
-const OP_INFO = [
+const _OP_INFO = [
   {
     c: 'D',
     name: 'Delay',
@@ -146,7 +146,7 @@ export class OcraV11Module extends ModuleBase {
   loadGrid(g) {
     for (let y = 0; y < GH; y++) {
       for (let x = 0; x < GW; x++) {
-        this.grid[y][x] = g[y] && g[y][x] ? g[y][x] : '.';
+        this.grid[y][x] = g[y]?.[x] ? g[y][x] : '.';
       }
     }
   }
@@ -213,7 +213,7 @@ export class OcraV11Module extends ModuleBase {
 
   noteFreq(nv, oct) {
     const s = PENTA[nv % 5] + Math.floor(nv / 5) * 12;
-    return 440 * Math.pow(2, ((oct + 1) * 12 + s - 69) / 12);
+    return 440 * 2 ** (((oct + 1) * 12 + s - 69) / 12);
   }
 
   runOrca() {
@@ -293,7 +293,7 @@ export class OcraV11Module extends ModuleBase {
     for (const n of notes) {
       if (!this.isRowAudible(n.row)) continue;
 
-      const f = this.noteFreq(n.note, n.oct);
+      const _f = this.noteFreq(n.note, n.oct);
       const g = this.rowGains[n.row];
       g.gain.value = this.rowStates[n.row].vol;
 
@@ -440,7 +440,7 @@ export class OcraV11Module extends ModuleBase {
     if (mixer) {
       mixer.addEventListener('input', (e) => {
         const row = Number.parseInt(e.target.dataset.row);
-        if (isNaN(row)) return;
+        if (Number.isNaN(row)) return;
 
         if (e.target.classList.contains('mix-vol')) {
           this.rowStates[row].vol = e.target.value / 100;
@@ -519,7 +519,7 @@ export class OcraV11Module extends ModuleBase {
         const px = this.canvasGap + x * this.canvasStep;
         const py = this.canvasGap + y * this.canvasStep;
         const c = this.grid[y][x];
-        const active = act && act[y][x];
+        const active = act?.[y][x];
         const isCur = x === this.cursorX && y === this.cursorY;
 
         // Cell background

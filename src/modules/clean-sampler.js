@@ -61,7 +61,7 @@ export class CleanSamplerModule extends ModuleBase {
     const m = String(note).match(/^([A-G]#?)(-?\d+)$/);
     if (!m) return 1;
     const midi = (Number(m[2]) + 1) * 12 + names.indexOf(m[1]);
-    return Math.pow(2, (midi - 60) / 12);
+    return 2 ** ((midi - 60) / 12);
   }
 
   connectAudio(destination) {

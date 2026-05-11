@@ -49,7 +49,8 @@
       "suspicious": {
         "recommended": true,
         "noArrayIndexKey": "warn",
-        "noExplicitAny": "warn"
+        "noExplicitAny": "warn",
+        "noAssignInExpressions": "off"
       },
       "performance": {
         "recommended": true

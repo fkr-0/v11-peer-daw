@@ -32,10 +32,10 @@ export class PatchCanvas {
   edgePath(edge) {
     const a = this.positions.get(edge.from) || { x: 0, y: 0 };
     const b = this.positions.get(edge.to) || { x: 280, y: 80 };
-    const x1 = a.x + 128,
-      y1 = a.y + 62,
-      x2 = b.x + 12,
-      y2 = b.y + 62;
+    const x1 = a.x + 128;
+    const y1 = a.y + 62;
+    const x2 = b.x + 12;
+    const y2 = b.y + 62;
     const mid = (x1 + x2) / 2;
     return `<path d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" data-from="${escapeAttr(edge.from)}" data-to="${escapeAttr(edge.to)}"></path>`;
   }

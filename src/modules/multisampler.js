@@ -78,9 +78,9 @@ export class MultiSamplerModule extends ModuleBase {
   }
 
   pitchRatio(note, root = 'C4') {
-    const n = this.midi(note),
-      r = this.midi(root);
-    return Math.pow(2, (n - r) / 12);
+    const n = this.midi(note);
+    const r = this.midi(root);
+    return 2 ** ((n - r) / 12);
   }
 
   midi(note) {

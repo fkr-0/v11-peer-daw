@@ -101,7 +101,7 @@ class V11PeerDAW {
 
   createStarfield() {
     const root = document.querySelector('#starfield');
-    root.innerHTML = Array.from({ length: 120 }, (_, i) => {
+    root.innerHTML = Array.from({ length: 120 }, (_, _i) => {
       const x = Math.random() * 100;
       const y = Math.random() * 100;
       const s = 1 + Math.random() * 2;
