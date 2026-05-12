@@ -32,7 +32,10 @@ class V11PeerDAW {
     });
 
     // Session state
-    this.sessionCode = null;
+    this.urlParams = new URLSearchParams(window.location.search);
+    this.sessionCode = this.urlParams.get('session') || null;
+    this.targetPeerId = this.urlParams.get('targetPeerId') || '';
+    this.spectateMode = this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
     this.peerList = [];
   }
 
@@ -44,6 +47,7 @@ class V11PeerDAW {
     this.bindPatchCanvas();
     this.bindPeernetStack();
     await this.bootstrapDefaultRig();
+    this.autoJoinFromUrl();
   }
 
   createStarfield() {
@@ -77,7 +81,7 @@ class V11PeerDAW {
 
     document.querySelector('#btnConnectPeer').addEventListener('click', () => {
       const username = document.querySelector('#pilotName').value || 'pilot';
-      this.peernet.start({ username });
+      this.peernet.start({ username, targetPeerId: this.targetPeerId, spectate: this.spectateMode, sessionCode: this.sessionCode });
     });
 
     document.querySelector('#btnCreateSession').addEventListener('click', () => {
@@ -197,6 +201,15 @@ class V11PeerDAW {
     );
 
     this.renderRoutes();
+  }
+
+  autoJoinFromUrl() {
+    if (this.urlParams.get('multiplayer') !== 'true' && !this.targetPeerId && !this.sessionCode) return;
+    const username = this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
+    document.querySelector('#pilotName').value = username;
+    this.peernet.start({ username, targetPeerId: this.targetPeerId, spectate: this.spectateMode, sessionCode: this.sessionCode });
+    const target = this.targetPeerId ? ' for ' + this.targetPeerId : '';
+    this.logText((this.spectateMode ? 'observing' : 'joining') + ' peer session' + target);
   }
 
   bindPeernetStack() {

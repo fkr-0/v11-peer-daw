@@ -1,7 +1,23 @@
+import { cp } from 'node:fs/promises';
+import { join } from 'node:path';
 import { defineConfig } from 'vite';
+
+function copyStaticRuntimeAssets() {
+  return {
+    name: 'copy-static-runtime-assets',
+    async closeBundle() {
+      await Promise.all([
+        cp(join(process.cwd(), 'vendor'), join(process.cwd(), 'dist', 'vendor'), { recursive: true, force: true }),
+        cp(join(process.cwd(), 'docs'), join(process.cwd(), 'dist', 'docs'), { recursive: true, force: true }),
+      ]);
+    },
+  };
+}
 
 export default defineConfig({
   root: '.',
+  base: './',
+  plugins: [copyStaticRuntimeAssets()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
