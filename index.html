@@ -100,6 +100,25 @@
           <div id="sessionCode" class="session-code"></div>
           <div id="peerList" class="peer-list"></div>
         </div>
+
+        <div class="session-panel project-io-panel">
+          <h2>Project I/O</h2>
+          <label class="microcopy" for="projectExportMode">Export mode</label>
+          <select id="projectExportMode" class="mini-input" aria-label="Project export mode">
+            <option value="just-project">just-project · no samples</option>
+            <option value="inline-samples-project">inline-samples-project · JSON with b64 samples</option>
+            <option value="project-archive">project archive · ZIP with JSON + WAV samples</option>
+            <option value="project-replaced">project-replaced · placeholder synths</option>
+          </select>
+          <textarea id="projectIoText" class="mini-input" rows="7" placeholder="copy/export JSON appears here; paste/import JSON here"></textarea>
+          <input id="projectImportFile" class="mini-input" type="file" accept="application/json,.json,application/zip,.zip">
+          <div class="button-row">
+            <button id="btnCopyProject" type="button">COPY</button>
+            <button id="btnPasteProject" type="button">PASTE / IMPORT</button>
+            <button id="btnDownloadProject" type="button">DOWNLOAD</button>
+          </div>
+          <p class="microcopy">Choose no samples, inline b64 samples, ZIP archive, or placeholder synth/drum-machine replacement.</p>
+        </div>
       </aside>
 
       <section class="panel rack">

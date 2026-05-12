@@ -5,6 +5,7 @@ import { AudioRuntime } from './core/audio.js';
 import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
+import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
 import { RoutingGraph } from './core/routing-graph.js';
 import { createDefaultPeerDawRig, moduleFactories } from './modules/catalog.js';
 import { PatchCanvas } from './ui/patch-canvas.js';
@@ -112,6 +113,19 @@ class V11PeerDAW {
       this.renderRoutes();
       this.renderPatchCanvas();
       this.logText('All routes cleared');
+    });
+
+    document.querySelector('#btnCopyProject')?.addEventListener('click', () => this.copyProject());
+    document
+      .querySelector('#btnPasteProject')
+      ?.addEventListener('click', () => this.pasteProject());
+    document
+      .querySelector('#btnDownloadProject')
+      ?.addEventListener('click', () => this.downloadProject());
+    document.querySelector('#projectImportFile')?.addEventListener('change', (event) => {
+      const file = event.target.files?.[0];
+      if (file) this.importProjectFile(file);
+      event.target.value = '';
     });
   }
 
@@ -347,6 +361,13 @@ class V11PeerDAW {
     }
   }
 
+  projectSource() {
+    return {
+      modules: [...this.patchBay.modules.values()],
+      routes: this.patchBay.routes,
+    };
+  }
+
   serializeRig() {
     return {
       version: 1,
@@ -362,8 +383,88 @@ class V11PeerDAW {
     };
   }
 
+  selectedProjectExportMode() {
+    return document.querySelector('#projectExportMode')?.value || 'just-project';
+  }
+
+  async createProjectExport(mode = this.selectedProjectExportMode()) {
+    return createProjectPackage(this.projectSource(), { mode });
+  }
+
+  async copyProject() {
+    const pkg = await this.createProjectExport();
+    document.querySelector('#projectIoText').value = pkg.text;
+    await navigator.clipboard?.writeText(pkg.text);
+    this.logText(`project copied: ${pkg.mode}`);
+  }
+
+  async pasteProject() {
+    const field = document.querySelector('#projectIoText');
+    const clipboardText = await navigator.clipboard?.readText?.().catch(() => '');
+    const text = clipboardText || field.value;
+    field.value = text;
+    this.applyRig(parseProjectPayload(text));
+  }
+
+  async importProjectFile(file) {
+    const payload = file.name.endsWith('.zip') ? await file.arrayBuffer() : await file.text();
+    this.applyRig(parseProjectPayload(payload));
+    this.logText(`project imported: ${file.name}`);
+  }
+
+  async downloadProject() {
+    const pkg = await this.createProjectExport();
+    const blob = new Blob([pkg.bytes || pkg.text], { type: pkg.mime });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = pkg.filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    document.querySelector('#projectIoText').value = pkg.text;
+    this.logText(`project downloaded: ${pkg.filename}`);
+  }
+
+  async rebuildRigFromProject(project) {
+    for (const module of [...this.patchBay.modules.values()]) this.removeModule(module.id);
+    this.patchBay.routes = [];
+    this.routingGraph = new RoutingGraph();
+    this.bindPatchCanvas();
+    this.mixer = null;
+    this.clock = null;
+
+    for (const moduleData of project.modules || []) {
+      const type = moduleData.moduleType || moduleData.kind;
+      const factory =
+        moduleFactories[type] || moduleFactories[moduleData.kind] || moduleFactories.synth;
+      const module = factory();
+      module.id = moduleData.id || module.id;
+      module.title = moduleData.title || module.title;
+      module.hydrate?.(moduleData);
+      if (module.kind === 'clock') this.clock = module;
+      if (type === 'master' || moduleData.id === 'main-mixer') this.mixer = module;
+      await this.addModule(module, { autoConnectAudio: true });
+    }
+
+    this.patchBay.routes = Array.from(project.routes || []);
+    for (const route of this.patchBay.routes) {
+      this.routingGraph.connect(route.from.moduleId, route.to.moduleId, route.from.outputId);
+    }
+    this.renderRoutes();
+    this.renderPatchCanvas();
+    this.updateStats();
+  }
+
   applyRig(payload) {
-    this.logText(`restore requested: ${payload?.modules?.length || 0} modules`);
+    if (payload?.archiveBytes) {
+      this.logText(
+        'archive import detected; JSON project restore is available after extracting project.json'
+      );
+      return;
+    }
+    this.rebuildRigFromProject(payload).catch((error) =>
+      this.logText(`project import failed: ${error.message}`)
+    );
   }
 }
 
