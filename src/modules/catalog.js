@@ -7,6 +7,7 @@ import { ChannelStripModule, MixerDeskModule } from './channel-strip.js';
 import { CleanSamplerModule } from './clean-sampler.js';
 import { CleanSynthModule } from './clean-synth.js';
 import { ClockModule } from './clock.js';
+import { DrumSamplerModule } from './drum-sampler.js';
 import {
   BpmBeatLooperModule,
   DubEchoModule,
@@ -50,6 +51,7 @@ export const moduleFactories = Object.freeze({
   cleansynth: () => new CleanSynthModule(),
   polysynth: () => new PolySynthModule(),
   drumsynth: () => new DrumSynthModule(),
+  drumsampler: () => new DrumSamplerModule(),
   sampler: () => new CleanSamplerModule(),
   multisampler: () => new MultiSamplerModule(),
 
@@ -72,6 +74,23 @@ export const moduleFactories = Object.freeze({
   peer: () => new PeerBridgeModule(),
 });
 
+function createClassicTwoBarDrumNotes() {
+  return [
+    { id: 'kick-1', beat: 0, note: 'C1', velocity: 1, duration: 0.08 },
+    { id: 'snare-1', beat: 2, note: 'D1', velocity: 0.92, duration: 0.08 },
+    { id: 'kick-2', beat: 4, note: 'C1', velocity: 1, duration: 0.08 },
+    { id: 'kick-3', beat: 5, note: 'C1', velocity: 0.88, duration: 0.08 },
+    { id: 'snare-2', beat: 6, note: 'D1', velocity: 0.92, duration: 0.08 },
+    ...Array.from({ length: 16 }, (_, index) => ({
+      id: `hat-${index + 1}`,
+      beat: index * 0.5,
+      note: 'F#1',
+      velocity: index % 2 === 0 ? 0.62 : 0.42,
+      duration: 0.05,
+    })),
+  ];
+}
+
 export function createDefaultPeerDawRig(runtime) {
   return {
     master: new MixerModule(runtime, { id: 'main-mixer', title: 'Master Mixer' }),
@@ -79,6 +98,20 @@ export function createDefaultPeerDawRig(runtime) {
     ocra: new OcraV11Module({ id: 'main-ocra', title: 'OCRA V11 Grid' }),
     synth: new CleanSynthModule({ id: 'main-synth', title: 'Main Synth' }),
     sampler: new CleanSamplerModule({ id: 'main-sampler', title: 'Sampler' }),
+    drumSampler: new DrumSamplerModule({
+      id: 'default-drum-sampler',
+      title: 'Default Drum Sampler',
+      swing: 'swing60',
+      swingResolution: '1/8',
+    }),
+    drumPianoRoll: new PianoRollModule({
+      id: 'default-drum-roll',
+      title: 'Default 2-Bar Drum Piano Roll',
+      lengthBeats: 8,
+      stepResolutionBeats: 0.25,
+      swing: { amount: 'swing60', resolution: '1/8' },
+      notes: createClassicTwoBarDrumNotes(),
+    }),
     field: new FieldRecorderModule({ id: 'field-recorder', title: 'Field Recorder' }),
     peer: new PeerBridgeModule({ id: 'peer-bridge', title: 'Peer Bridge' }),
   };

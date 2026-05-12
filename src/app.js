@@ -136,9 +136,19 @@ class V11PeerDAW {
     const rig = createDefaultPeerDawRig(this.runtime);
     this.mixer = rig.master;
     this.clock = rig.clock;
-    const { ocra, synth, sampler, field, peer } = rig;
+    const { ocra, synth, sampler, drumSampler, drumPianoRoll, field, peer } = rig;
 
-    for (const module of [this.mixer, this.clock, ocra, synth, sampler, field, peer]) {
+    for (const module of [
+      this.mixer,
+      this.clock,
+      ocra,
+      synth,
+      sampler,
+      drumSampler,
+      drumPianoRoll,
+      field,
+      peer,
+    ]) {
       await this.addModule(module, { autoConnectAudio: true });
     }
 
@@ -154,6 +164,18 @@ class V11PeerDAW {
     this.patchBay.connect(
       { moduleId: ocra.id, outputId: 'midi' },
       { moduleId: sampler.id, inputId: 'midi' }
+    );
+    this.patchBay.connect(
+      { moduleId: this.clock.id, outputId: 'clock' },
+      { moduleId: drumPianoRoll.id, inputId: 'clock' }
+    );
+    this.patchBay.connect(
+      { moduleId: drumPianoRoll.id, outputId: 'midi' },
+      { moduleId: drumSampler.id, inputId: 'midi' }
+    );
+    this.patchBay.connect(
+      { moduleId: drumPianoRoll.id, outputId: 'control' },
+      { moduleId: drumSampler.id, inputId: 'control' }
     );
     this.patchBay.connect(
       { moduleId: synth.id, outputId: 'midi' },
