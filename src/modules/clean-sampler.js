@@ -64,6 +64,29 @@ export class CleanSamplerModule extends ModuleBase {
     return 2 ** ((midi - 60) / 12);
   }
 
+  extractWaveformPeaks(bars = 48) {
+    if (!this.buffer) return [];
+    const data = this.buffer.getChannelData(0);
+    const step = Math.max(1, Math.ceil(data.length / bars));
+    return Array.from({ length: bars }, (_, index) => {
+      let peak = 0;
+      const start = index * step;
+      const end = Math.min(data.length, start + step);
+      for (let cursor = start; cursor < end; cursor += 1) {
+        peak = Math.max(peak, Math.abs(data[cursor] || 0));
+      }
+      return Number(Math.min(1, peak).toFixed(3));
+    });
+  }
+
+  renderWaveform(bars = 48) {
+    if (!this.buffer) return '<p class="microcopy">Load a sample to see its waveform.</p>';
+    const barsHtml = this.extractWaveformPeaks(bars)
+      .map((peak) => `<i style="height:${Math.max(4, Math.round(peak * 48))}px"></i>`)
+      .join('');
+    return `<div class="waveform sampler-waveform" role="img" aria-label="Waveform preview for ${this.fileName}">${barsHtml}</div>`;
+  }
+
   connectAudio(destination) {
     if (this.output && destination) this.output.connect(destination);
   }
@@ -79,6 +102,7 @@ export class CleanSamplerModule extends ModuleBase {
       <div class="module-head"><span>◈</span><strong>${this.title}</strong><small>MIDI/TRIGGER IN / AUDIO OUT</small></div>
       <div class="drop-zone" tabindex="0">${this.fileName}</div>
       <input type="file" accept="audio/*" class="file-input">
+      ${this.renderWaveform()}
       <button class="mini-button" data-play>PLAY C4</button>
       <p class="microcopy">Clean one-shot sampler. MIDI note changes playback rate around C4.</p>
     `;
