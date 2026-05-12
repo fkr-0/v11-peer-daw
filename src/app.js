@@ -338,7 +338,39 @@ class V11PeerDAW {
     document.querySelector('#routeCount').textContent = `${this.patchBay.routes.length} routes`;
   }
 
+  async replaceWithPianoRoll(moduleId, pianoRollConfig) {
+    const existingRoutes = this.patchBay.routes.filter(
+      (route) => route.from.moduleId === moduleId || route.to.moduleId === moduleId
+    );
+    this.removeModule(moduleId);
+    const pianoRoll = moduleFactories.pianoroll();
+    pianoRoll.id = pianoRollConfig.id;
+    pianoRoll.title = pianoRollConfig.title;
+    pianoRoll.hydrate?.(pianoRollConfig);
+    await this.addModule(pianoRoll, { autoConnectAudio: false });
+    for (const route of existingRoutes) {
+      const rewritten = {
+        from: {
+          ...route.from,
+          moduleId: route.from.moduleId === moduleId ? pianoRoll.id : route.from.moduleId,
+        },
+        to: {
+          ...route.to,
+          moduleId: route.to.moduleId === moduleId ? pianoRoll.id : route.to.moduleId,
+        },
+      };
+      this.patchBay.connect(rewritten.from, rewritten.to);
+    }
+    this.renderRoutes();
+    this.renderPatchCanvas();
+    this.logText(`converted ${moduleId} to piano roll`);
+  }
+
   logPacket({ from, outputId, packet }) {
+    if (packet.kind === PortType.CONTROL && packet.type === 'replace-module') {
+      this.replaceWithPianoRoll(packet.target || from, packet.value);
+      return;
+    }
     this.peernet.broadcastPacket(packet, outputId);
     const row = document.createElement('div');
     row.className = `packet ${packet.kind}`;
