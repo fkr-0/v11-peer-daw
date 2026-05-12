@@ -3,6 +3,12 @@
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value)));
+}
+
 export class CleanSamplerModule extends ModuleBase {
   constructor(config = {}) {
     super({
@@ -17,8 +23,17 @@ export class CleanSamplerModule extends ModuleBase {
     });
     this.output = null;
     this.buffer = null;
-    this.fileName = 'drop or choose an audio sample';
+    this.fileName = config.fileName || 'drop or choose an audio sample';
     this.pitchMap = new Map();
+    this.rootNote = config.rootNote || 'C4';
+    this.timeShift = config.timeShift ?? 0;
+    this.stretchRatio = config.stretchRatio ?? 1;
+    this.pitchSemitones = config.pitchSemitones ?? 0;
+    this.pitchCents = config.pitchCents ?? 0;
+    this.attack = config.attack ?? 0.005;
+    this.decay = config.decay ?? 0.04;
+    this.sustain = config.sustain ?? 0.85;
+    this.release = config.release ?? 0.08;
   }
 
   async start(context) {
@@ -41,27 +56,115 @@ export class CleanSamplerModule extends ModuleBase {
     if (packet.kind === PortType.MIDI && packet.type === 'note-on')
       this.play(packet.note, packet.velocity ?? 0.8, packetAudioTime(this.ctx, packet));
     if (packet.kind === PortType.CONTROL && packet.type === 'trigger')
-      this.play(packet.note || 'C4', packet.velocity ?? 0.8, packetAudioTime(this.ctx, packet));
+      this.play(
+        packet.note || this.rootNote,
+        packet.velocity ?? 0.8,
+        packetAudioTime(this.ctx, packet)
+      );
+    if (packet.kind === PortType.CONTROL && packet.type === 'param') {
+      this.setParam(packet.target, packet.value);
+    }
   }
 
-  play(note = 'C4', velocity = 0.8, when = this.ctx?.currentTime || 0) {
+  play(note = this.rootNote, velocity = 0.8, when = this.ctx?.currentTime || 0) {
     if (!this.ctx || !this.output || !this.buffer) return;
     const src = this.ctx.createBufferSource();
     const amp = this.ctx.createGain();
+    const offset = Math.min(Math.max(0, this.timeShift), this.buffer.duration);
+    const sourceDuration = Math.max(0, this.buffer.duration - offset);
+    const playedDuration = sourceDuration * this.stretchRatio;
+
     src.buffer = this.buffer;
-    src.playbackRate.value = this.pitchRatio(note);
-    amp.gain.value = velocity;
+    src.playbackRate.value = this.playbackRateFor(note);
+    this.applyAdsr(amp.gain, velocity, when, playedDuration);
     src.connect(amp);
     amp.connect(this.output);
-    src.start(when);
+    src.start(when, offset, sourceDuration);
+    src.stop?.(when + playedDuration + this.release + 0.05);
+  }
+
+  applyAdsr(gain, velocity, when, duration) {
+    const attackEnd = when + this.attack;
+    const decayEnd = attackEnd + this.decay;
+    const releaseStart = when + Math.max(this.attack + this.decay, duration);
+    gain.setValueAtTime(0.0001, when);
+    gain.linearRampToValueAtTime(Math.max(0.001, velocity), attackEnd);
+    gain.linearRampToValueAtTime(Math.max(0.001, velocity * this.sustain), decayEnd);
+    gain.setTargetAtTime(0.0001, releaseStart, this.release);
+  }
+
+  playbackRateFor(note) {
+    return (
+      (this.pitchRatio(note) * 2 ** ((this.pitchSemitones + this.pitchCents / 100) / 12)) /
+      this.stretchRatio
+    );
   }
 
   pitchRatio(note) {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    return 2 ** ((this.midi(note) - this.midi(this.rootNote)) / 12);
+  }
+
+  midi(note) {
     const m = String(note).match(/^([A-G]#?)(-?\d+)$/);
-    if (!m) return 1;
-    const midi = (Number(m[2]) + 1) * 12 + names.indexOf(m[1]);
-    return 2 ** ((midi - 60) / 12);
+    if (!m) return 60;
+    return (Number(m[2]) + 1) * 12 + NOTE_NAMES.indexOf(m[1]);
+  }
+
+  setParam(target, value) {
+    const setters = {
+      rootNote: () => {
+        this.rootNote = String(value || this.rootNote);
+      },
+      timeShift: () => {
+        this.timeShift = clamp(value, 0, 3600);
+      },
+      stretchRatio: () => {
+        this.stretchRatio = clamp(value, 0.25, 4);
+      },
+      pitchSemitones: () => {
+        this.pitchSemitones = clamp(value, -48, 48);
+      },
+      pitchCents: () => {
+        this.pitchCents = clamp(value, -100, 100);
+      },
+      attack: () => {
+        this.attack = clamp(value, 0, 10);
+      },
+      decay: () => {
+        this.decay = clamp(value, 0, 10);
+      },
+      sustain: () => {
+        this.sustain = clamp(value, 0, 1);
+      },
+      release: () => {
+        this.release = clamp(value, 0.001, 10);
+      },
+    };
+    setters[target]?.();
+    this.render();
+  }
+
+  serialize() {
+    return {
+      ...super.serialize(),
+      fileName: this.fileName,
+      params: {
+        attack: this.attack,
+        decay: this.decay,
+        pitchCents: this.pitchCents,
+        pitchSemitones: this.pitchSemitones,
+        release: this.release,
+        rootNote: this.rootNote,
+        stretchRatio: this.stretchRatio,
+        sustain: this.sustain,
+        timeShift: this.timeShift,
+      },
+    };
+  }
+
+  hydrate(data = {}) {
+    this.fileName = data.fileName || this.fileName;
+    for (const [key, value] of Object.entries(data.params || {})) this.setParam(key, value);
   }
 
   extractWaveformPeaks(bars = 48) {
@@ -103,10 +206,21 @@ export class CleanSamplerModule extends ModuleBase {
       <div class="drop-zone" tabindex="0">${this.fileName}</div>
       <input type="file" accept="audio/*" class="file-input">
       ${this.renderWaveform()}
-      <button class="mini-button" data-play>PLAY C4</button>
-      <p class="microcopy">Clean one-shot sampler. MIDI note changes playback rate around C4.</p>
+      <div class="effect-rack sampler-controls">
+        <label>Root <input class="mini-input" data-param="rootNote" type="text" value="${this.rootNote}"></label>
+        <label>Shift <input class="mini-input" data-param="timeShift" type="number" min="0" step="0.01" value="${this.timeShift}"></label>
+        <label>Stretch <input class="mini-input" data-param="stretchRatio" type="range" min="0.25" max="4" step="0.01" value="${this.stretchRatio}"></label>
+        <label>Pitch <input class="mini-input" data-param="pitchSemitones" type="range" min="-48" max="48" step="1" value="${this.pitchSemitones}"></label>
+        <label>Cents <input class="mini-input" data-param="pitchCents" type="range" min="-100" max="100" step="1" value="${this.pitchCents}"></label>
+        <label>A <input class="mini-input" data-param="attack" type="range" min="0" max="2" step="0.001" value="${this.attack}"></label>
+        <label>D <input class="mini-input" data-param="decay" type="range" min="0" max="2" step="0.001" value="${this.decay}"></label>
+        <label>S <input class="mini-input" data-param="sustain" type="range" min="0" max="1" step="0.01" value="${this.sustain}"></label>
+        <label>R <input class="mini-input" data-param="release" type="range" min="0.001" max="4" step="0.001" value="${this.release}"></label>
+      </div>
+      <button class="mini-button" data-play>PLAY ${this.rootNote}</button>
+      <p class="microcopy">One-shot sampler with waveform preview, time-shift, stretch/repitch, pitch offset, and ADSR.</p>
     `;
-    const input = this.root.querySelector('input');
+    const input = this.root.querySelector('input[type=file]');
     const drop = this.root.querySelector('.drop-zone');
     input.addEventListener('change', (e) => e.target.files[0] && this.loadFile(e.target.files[0]));
     drop.addEventListener('dragover', (e) => {
@@ -120,6 +234,12 @@ export class CleanSamplerModule extends ModuleBase {
       const file = e.dataTransfer.files[0];
       if (file) this.loadFile(file);
     });
-    this.root.querySelector('[data-play]').addEventListener('click', () => this.play('C4', 0.9));
+    this.root.querySelectorAll('[data-param]').forEach((el) => {
+      el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value));
+      el.addEventListener('change', (e) => this.setParam(e.target.dataset.param, e.target.value));
+    });
+    this.root
+      .querySelector('[data-play]')
+      .addEventListener('click', () => this.play(this.rootNote, 0.9));
   }
 }

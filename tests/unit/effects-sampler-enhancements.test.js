@@ -19,12 +19,18 @@ class FakeAudioParam {
     this.value = value;
     this.events.push(['setValueAtTime', value, when]);
   }
+  linearRampToValueAtTime(value, when) {
+    this.value = value;
+    this.events.push(['linearRampToValueAtTime', value, when]);
+  }
 }
 
 class FakeNode {
   constructor(kind) {
     this.kind = kind;
     this.connections = [];
+    this.started = [];
+    this.stopped = [];
   }
   connect(destination) {
     this.connections.push(destination);
@@ -32,7 +38,12 @@ class FakeNode {
   disconnect() {
     this.connections = [];
   }
-  start() {}
+  start(...args) {
+    this.started.push(args);
+  }
+  stop(...args) {
+    this.stopped.push(args);
+  }
 }
 
 class FakeAudioContext {
@@ -66,11 +77,17 @@ class FakeAudioContext {
     this.created.push(node);
     return node;
   }
+  createBufferSource() {
+    const node = new FakeNode('bufferSource');
+    node.playbackRate = new FakeAudioParam(1);
+    this.created.push(node);
+    return node;
+  }
 }
 
-function fakeBuffer(samples) {
+function fakeBuffer(samples, duration = 1) {
   return {
-    duration: 1,
+    duration,
     length: samples.length,
     getChannelData() {
       return Float32Array.from(samples);
@@ -128,5 +145,74 @@ describe('clean sampler waveform enhancement', () => {
     expect(html).toContain('class="waveform sampler-waveform"');
     expect(html).toContain('aria-label="Waveform preview for loop.wav"');
     expect(html.match(/<i style="height:/g)).toHaveLength(4);
+  });
+
+  test('schedules time-shifted stretched pitched playback with an ADSR envelope', async () => {
+    const ctx = new FakeAudioContext();
+    const sampler = new CleanSamplerModule({
+      id: 'sampler-transport-test',
+      timeShift: 0.25,
+      stretchRatio: 2,
+      pitchSemitones: 12,
+      pitchCents: -50,
+      attack: 0.02,
+      decay: 0.1,
+      sustain: 0.4,
+      release: 0.3,
+    });
+    await sampler.start(ctx);
+    sampler.buffer = fakeBuffer([0, 0.5, -0.5, 0.25], 2);
+
+    sampler.play('C4', 0.8, 5);
+
+    const source = ctx.created.find((node) => node.kind === 'bufferSource');
+    const amp = ctx.created.filter((node) => node.kind === 'gain').at(-1);
+    expect(source.buffer).toBe(sampler.buffer);
+    expect(source.playbackRate.value).toBeCloseTo(0.9715, 4);
+    expect(source.started[0]).toEqual([5, 0.25, 1.75]);
+    expect(source.stopped[0][0]).toBeCloseTo(8.85);
+    expect(amp.gain.events).toEqual([
+      ['setValueAtTime', 0.0001, 5],
+      ['linearRampToValueAtTime', 0.8, 5.02],
+      ['linearRampToValueAtTime', 0.32000000000000006, 5.119999999999999],
+      ['setTargetAtTime', 0.0001, 8.5, 0.3],
+    ]);
+  });
+
+  test('accepts sampler transport, pitch, and ADSR control params and serializes them', () => {
+    const sampler = new CleanSamplerModule({ id: 'sampler-param-test' });
+
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'timeShift', value: 0.4 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'stretchRatio', value: 0 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'pitchSemitones', value: -7 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'attack', value: 0.05 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'decay', value: 0.2 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'sustain', value: 1.4 });
+    sampler.receive({ kind: PortType.CONTROL, type: 'param', target: 'release', value: 0.5 });
+
+    expect(sampler.timeShift).toBe(0.4);
+    expect(sampler.stretchRatio).toBe(0.25);
+    expect(sampler.pitchSemitones).toBe(-7);
+    expect(sampler.attack).toBe(0.05);
+    expect(sampler.decay).toBe(0.2);
+    expect(sampler.sustain).toBe(1);
+    expect(sampler.release).toBe(0.5);
+    expect(sampler.serialize()).toEqual({
+      id: 'sampler-param-test',
+      title: 'Clean Sampler',
+      kind: 'audio-source',
+      fileName: 'drop or choose an audio sample',
+      params: {
+        attack: 0.05,
+        decay: 0.2,
+        pitchCents: 0,
+        pitchSemitones: -7,
+        release: 0.5,
+        rootNote: 'C4',
+        stretchRatio: 0.25,
+        sustain: 1,
+        timeShift: 0.4,
+      },
+    });
   });
 });
