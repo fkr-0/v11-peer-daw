@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
-import { PluginLoader } from '../../src/core/plugin-loader.js';
 import { SharedAudioTransport } from '../../src/core/dsp/shared-audio-transport.js';
+import { PluginLoader } from '../../src/core/plugin-loader.js';
 import { create, manifest } from '../../src/modules/field-recorder/index.js';
 
 describe('field recorder runtime plugin', () => {
@@ -32,6 +32,10 @@ describe('field recorder runtime plugin', () => {
     expect(workletCalls[0].name).toBe('field-recorder');
     expect(instance.params.get('gain')).toBe(0.6);
     expect(instance.transport.descriptor.channels).toBe(2);
-    expect(instance.serialize()).toEqual({ id: 'field-recorder', fileName: 'no sample loaded', params: { gain: 0.6 } });
+    expect(instance.serialize()).toEqual({
+      id: 'field-recorder',
+      fileName: 'no sample loaded',
+      params: { gain: 0.6 },
+    });
   });
 });

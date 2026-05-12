@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/audio-worklet-runtime.test.js
 // Unit tests for AudioWorkletRuntime
 
-const { describe, expect, test } = require('@jest/globals');
+import { describe, expect, test } from '@jest/globals';
 
 // Mock AudioWorkletRuntime
 class MockAudioWorkletRuntime {

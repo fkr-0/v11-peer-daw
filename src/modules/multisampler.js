@@ -21,6 +21,20 @@ export class MultiSamplerModule extends ModuleBase {
     this.fileName = 'drop audio for slicing / multisample';
   }
 
+  addSampleZone({ name = 'sample', rootNote = 'C4', minNote = 'C1', maxNote = 'C7', buffer }) {
+    if (!buffer) throw new Error('addSampleZone requires an AudioBuffer-like buffer');
+    this.samples.set(rootNote, buffer);
+    this.zones.push({
+      rootNote,
+      min: this.midi(minNote),
+      max: this.midi(maxNote),
+      buffer,
+      name,
+    });
+    this.fileName = name;
+    this.render();
+  }
+
   async start(context) {
     this.ctx = context;
     if (!this.output) {
@@ -32,16 +46,13 @@ export class MultiSamplerModule extends ModuleBase {
   async loadFile(file, rootNote = 'C4', minNote = 'C1', maxNote = 'C7') {
     if (!this.ctx) return;
     const buffer = await this.ctx.decodeAudioData(await file.arrayBuffer());
-    this.samples.set(rootNote, buffer);
-    this.zones.push({
-      rootNote,
-      min: this.midi(minNote),
-      max: this.midi(maxNote),
-      buffer,
+    this.addSampleZone({
       name: file.name,
+      rootNote,
+      minNote,
+      maxNote,
+      buffer,
     });
-    this.fileName = file.name;
-    this.render();
   }
 
   receive(packet) {
@@ -92,6 +103,25 @@ export class MultiSamplerModule extends ModuleBase {
   noteName(midi) {
     const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     return `${names[midi % 12]}${Math.floor(midi / 12) - 1}`;
+  }
+
+  serialize() {
+    return {
+      ...super.serialize(),
+      sliceCount: this.sliceCount,
+      fileName: this.fileName,
+      zones: this.zones.map((zone) => ({
+        name: zone.name,
+        rootNote: zone.rootNote,
+        minNote: this.noteName(zone.min),
+        maxNote: this.noteName(zone.max),
+      })),
+    };
+  }
+
+  hydrate(data = {}) {
+    this.sliceCount = data.sliceCount || this.sliceCount;
+    this.fileName = data.fileName || this.fileName;
   }
 
   connectAudio(dest) {

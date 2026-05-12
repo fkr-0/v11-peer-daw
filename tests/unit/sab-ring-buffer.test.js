@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/sab-ring-buffer.test.js
 // Unit tests for SharedFloat32RingBuffer
 
-const { describe, expect, test } = require('@jest/globals');
+import { describe, expect, test } from '@jest/globals';
 
 // Mock SharedFloat32RingBuffer
 class MockSharedFloat32RingBuffer {

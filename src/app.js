@@ -6,62 +6,8 @@ import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
 import { RoutingGraph } from './core/routing-graph.js';
-import { ArpMidiGeneratorModule, BasicSequencerModule } from './modules/advanced-sequencer.js';
-import { BasicSynthModule } from './modules/basic-synth.js';
-import { ChannelStripModule, MixerDeskModule } from './modules/channel-strip.js';
-import { CleanSamplerModule } from './modules/clean-sampler.js';
-import { CleanSynthModule } from './modules/clean-synth.js';
-import { ClockModule } from './modules/clock.js';
-import {
-  BpmBeatLooperModule,
-  DubEchoModule,
-  FlangerModule,
-  PhaserModule,
-  ReverbModule,
-  TapeEchoModule,
-} from './modules/effects.js';
-import { FieldRecorderModule } from './modules/field-recorder.js';
-import { MixerModule } from './modules/mixer.js';
-import { MultiSamplerModule } from './modules/multisampler.js';
-import { OcraV11Module } from './modules/ocra-v11.js';
-import { PeerBridgeModule } from './modules/peer-bridge.js';
-import { PianoRollModule } from './modules/piano-roll.js';
+import { createDefaultPeerDawRig, moduleFactories } from './modules/catalog.js';
 import { PatchCanvas } from './ui/patch-canvas.js';
-
-// Module Factory Registry
-const moduleFactories = {
-  // Timing & Control
-  clock: () => new ClockModule(),
-  metronome: () => new ClockModule({ title: 'Metronome', bpm: 120 }),
-
-  // Sequencers
-  ocra: () => new OcraV11Module(),
-  pianoroll: () => new PianoRollModule(),
-  basicseq: () => new BasicSequencerModule(),
-  arp: () => new ArpMidiGeneratorModule(),
-
-  // Instruments
-  synth: () => new BasicSynthModule(),
-  cleansynth: () => new CleanSynthModule(),
-  sampler: () => new CleanSamplerModule(),
-  multisampler: () => new MultiSamplerModule(),
-
-  // Effects
-  reverb: () => new ReverbModule(),
-  dubecho: () => new DubEchoModule(),
-  tapeecho: () => new TapeEchoModule(),
-  flanger: () => new FlangerModule(),
-  phaser: () => new PhaserModule(),
-
-  // Utilities
-  channel: () => new ChannelStripModule(),
-  mixerdesk: () => new MixerDeskModule(),
-  field: () => new FieldRecorderModule(),
-  beatlooper: () => new BpmBeatLooperModule(),
-
-  // Networking
-  peer: () => new PeerBridgeModule(),
-};
 
 class V11PeerDAW {
   constructor() {
@@ -187,13 +133,10 @@ class V11PeerDAW {
   }
 
   async bootstrapDefaultRig() {
-    this.mixer = new MixerModule(this.runtime, { id: 'main-mixer', title: 'Master Mixer' });
-    this.clock = new ClockModule({ id: 'main-clock', title: 'Transport Clock' });
-    const ocra = new OcraV11Module({ id: 'main-ocra', title: 'OCRA V11 Grid' });
-    const synth = new CleanSynthModule({ id: 'main-synth', title: 'Main Synth' });
-    const sampler = new CleanSamplerModule({ id: 'main-sampler', title: 'Sampler' });
-    const field = new FieldRecorderModule({ id: 'field-recorder', title: 'Field Recorder' });
-    const peer = new PeerBridgeModule({ id: 'peer-bridge', title: 'Peer Bridge' });
+    const rig = createDefaultPeerDawRig(this.runtime);
+    this.mixer = rig.master;
+    this.clock = rig.clock;
+    const { ocra, synth, sampler, field, peer } = rig;
 
     for (const module of [this.mixer, this.clock, ocra, synth, sampler, field, peer]) {
       await this.addModule(module, { autoConnectAudio: true });

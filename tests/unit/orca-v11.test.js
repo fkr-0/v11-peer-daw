@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/orca-v11.test.js
 // Unit tests for ORCA V11 module
 
-const { beforeEach, describe, expect, it } = require('@jest/globals');
+import { beforeEach, describe, expect, it } from '@jest/globals';
 
 // Mock ModuleBase and dependencies
 class MockModuleBase {

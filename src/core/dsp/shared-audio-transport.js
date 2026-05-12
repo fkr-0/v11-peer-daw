@@ -32,7 +32,9 @@ export class SharedAudioTransport {
       overflowPolicy,
       atomics,
       stateBuffer: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * STATE_SLOTS),
-      sampleBuffer: new SharedArrayBuffer(Float32Array.BYTES_PER_ELEMENT * frameCapacity * channels),
+      sampleBuffer: new SharedArrayBuffer(
+        Float32Array.BYTES_PER_ELEMENT * frameCapacity * channels
+      ),
     });
   }
 

@@ -3,8 +3,8 @@ import {
   OverflowPolicy,
   SharedAudioTransport,
   WasmRingBufferView,
-  WorkletPullScheduler,
   WorkerDecodePipeline,
+  WorkletPullScheduler,
 } from '../../src/core/dsp/shared-audio-transport.js';
 
 describe('optimized shared audio transport', () => {
@@ -67,10 +67,7 @@ describe('optimized shared audio transport', () => {
 
   test('worklet pull scheduler fills outputs from shared consumer and zero-fills underruns', () => {
     const transport = SharedAudioTransport.create({ frameCapacity: 4, channels: 2 });
-    transport.producer().writeFrames([
-      Float32Array.from([1, 2]),
-      Float32Array.from([10, 20]),
-    ]);
+    transport.producer().writeFrames([Float32Array.from([1, 2]), Float32Array.from([10, 20])]);
     const scheduler = new WorkletPullScheduler({ consumer: transport.consumer(), channels: 2 });
     const outputs = [new Float32Array(4), new Float32Array(4)];
 

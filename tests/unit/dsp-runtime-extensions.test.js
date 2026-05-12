@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/dsp-runtime-extensions.test.js
 // Unit tests for DSP runtime extensions
 
-const { describe, expect, test } = require('@jest/globals');
+import { describe, expect, test } from '@jest/globals';
 
 // Mock ParameterStore
 class MockParameterStore {

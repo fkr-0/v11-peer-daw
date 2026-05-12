@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/field-recorder-worklet.test.js
 // Unit tests for Field Recorder worklet
 
-const { describe, expect, test } = require('@jest/globals');
+import { describe, expect, test } from '@jest/globals';
 
 class FakeRuntime {
   constructor() {

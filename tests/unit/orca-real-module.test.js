@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
-import { createLegacyModuleAdapter } from '../../src/core/modulebase-adapter.js';
 import { PortType } from '../../src/core/contracts.js';
+import { createLegacyModuleAdapter } from '../../src/core/modulebase-adapter.js';
 import { OcraV11Module } from '../../src/modules/ocra-v11.js';
 
 describe('OcraV11Module real adapter behavior', () => {

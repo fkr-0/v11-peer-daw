@@ -1,7 +1,7 @@
 // V11 Peer DAW/tests/unit/modulebase-adapter.test.js
 // Unit tests for ModuleBase compatibility adapter
 
-const { describe, expect, test } = require('@jest/globals');
+import { describe, expect, test } from '@jest/globals';
 
 // Mock dependencies
 const PortType = {
