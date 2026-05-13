@@ -1,0 +1,268 @@
+project: v11-peer-daw
+updated: 2026-05-13
+review_context:
+  user_observation:
+    issue: visual patch graph content appears as unstyled text; graph nodes and lines are not visibly rendering
+    screenshot_evidence:
+      - patch canvas host contains module labels and I/O text
+      - nodes are not boxed, positioned, or visually separated
+      - route lines are not visibly styled
+  current_focus: stabilize graph rendering first, then proceed through reliability tasks by urgency
+
+completed_this_pass:
+  patch_canvas_visual_rendering:
+    priority: critical
+    status: done
+    files_affected:
+      - src/ui/patch-canvas.js
+      - style.css
+      - tests/unit/patch-canvas.test.js
+    effects:
+      - added CSS for .patch-canvas, .patch-lines, .patch-node, .patch-port, and canvas microcopy
+      - made SVG paths visible with stroke styling and no fill
+      - increased patch canvas height from 180px to 360px so default rig nodes have room to render
+      - made missing graph endpoints render as visible external/system nodes
+      - rendered the implicit destination endpoint as Audio Out instead of an invisible phantom point
+    verification:
+      - unit test asserts patch canvas markup contains styled node and SVG edge primitives
+      - unit test asserts destination endpoint normalization
+  route_clear_consistency:
+    priority: critical
+    status: done
+    files_affected:
+      - src/core/routing-graph.js
+      - src/app.js
+      - tests/unit/routing-graph.test.js
+    effects:
+      - added RoutingGraph.clearEdges(type = null)
+      - Clear Routes now clears PatchBay routes, RoutingGraph edges, synced WebAudio graph connections, routes UI, and canvas
+      - stale canvas edges should no longer survive route clearing
+    verification:
+      - unit test covers clearing all graph edges and clearing by selected type
+  graph_runtime_sync:
+    priority: high
+    status: done
+    files_affected:
+      - src/app.js
+      - src/core/audio-graph-sync.js
+      - tests/unit/audio-graph-sync.test.js
+    effects:
+      - wired AudioGraphSync into app runtime
+      - removed duplicate direct connectAudio calls from the app start path
+      - graph-owned audio connections are reapplied deterministically
+    verification:
+      - unit tests cover audio graph apply and reapply behavior
+  lint_and_format_stability:
+    priority: high
+    status: done
+    files_affected:
+      - src/app.js
+      - vite.config.js
+      - tests/unit/patch-canvas.test.js
+    effects:
+      - Biome check passes for the modified tree
+      - imports and formatting are stable
+
+ordered_tasks:
+  - id: critical-01-rendered-graph-browser-smoke
+    title: Verify graph render in browser after CSS and endpoint fixes
+    priority: critical
+    status: in_progress
+    files_affected:
+      - style.css
+      - src/ui/patch-canvas.js
+      - index.html
+    desired_effects:
+      - default rig shows draggable node cards inside visual patch canvas
+      - audio edges appear as visible curved lines
+      - Audio Out pseudo-node appears for destination edges
+      - canvas no longer shows bare text labels in document flow
+    subtasks:
+      - run production build and static check
+      - inspect generated CSS bundle includes patch-node and patch-lines styles
+      - manually reload deployed artifact or local preview and compare against screenshot
+      - if deployment uses committed source only, deploy/rebuild artifact server bundle after commit
+    emerging_tasks:
+      - add Playwright or browser smoke test for computed style and nonzero node bounding boxes
+      - add screenshot regression test for default rig patch canvas
+  - id: critical-02-canvas-route-authority
+    title: Unify visual graph edits with runtime route authority
+    priority: critical
+    status: in_progress
+    files_affected:
+      - src/ui/patch-canvas.js
+      - src/app.js
+      - src/core/patchbay.js
+      - src/core/routing-graph.js
+    desired_effects:
+      - canvas audio edits update runtime audio graph immediately
+      - canvas route edits update any user-facing route counters or diagnostics that claim active route state
+      - PatchBay packet routes and RoutingGraph audio routes do not silently diverge without labeling
+    progress_this_pass:
+      - added handlePatchGraphChange as the app-level callback for visual graph edits
+      - patch canvas edits now sync audio graph, routes UI, and stats together
+      - Active Routes sidebar now separates packet routes from audio graph routes
+      - route stats now show packet and audio route counts separately
+    subtasks:
+      - define route scopes:
+          audio_graph:
+            owner: RoutingGraph
+            currently_used_by:
+              - PatchCanvas
+              - AudioGraphSync
+          packet_routes:
+            owner: PatchBay
+            currently_used_by:
+              - MIDI/control/clock packet routing
+              - Active Routes sidebar
+      - add UI labels distinguishing Audio Graph edges from Packet Routes: done
+      - update route count display to include graph audio edges or split counts into packet/audio: done
+      - add app-level onPatchGraphChange callback that can call syncAudioGraph, renderRoutes, renderPatchCanvas, and updateStats: done
+      - add tests for click-to-connect and shift-click disconnect behavior through PatchCanvas: todo
+    emerging_tasks:
+      - introduce RouteStore abstraction if PatchBay and RoutingGraph continue to share concepts
+      - create route schema migration before project exports include visual audio graph
+  - id: high-01-project-export-completeness
+    title: Include visual audio graph state in project exports
+    priority: high
+    status: todo
+    files_affected:
+      - src/app.js
+      - src/core/project-io.js
+      - src/ui/patch-canvas.js
+      - tests/unit/project-io.test.js
+    desired_effects:
+      - saved projects restore graph audio edges
+      - saved projects restore patch canvas node positions
+      - imported projects do not lose user-edited audio routing
+    subtasks:
+      - extend projectSource with routingGraph.serialize output
+      - extend createProjectPackage schema with graph field
+      - rebuildRigFromProject should restore graph edges after modules exist
+      - persist patchCanvas positions as plain object keyed by module id
+      - add round-trip tests for graph edges and canvas positions
+    emerging_tasks:
+      - add schemaVersion 2 migration or keep backwards-compatible optional graph field under schemaVersion 1
+      - validate imported graph endpoints against module ids before applying
+  - id: high-02-module-lifecycle-conformance
+    title: Verify every module can mount/start/connect/disconnect/serialize safely
+    priority: high
+    status: todo
+    files_affected:
+      - src/modules/*.js
+      - src/core/contracts.js
+      - tests/unit/*
+    desired_effects:
+      - no module throws when start is called twice
+      - no module leaks duplicate output connections on repeated start/sync
+      - serialize/hydrate works across all factories
+    subtasks:
+      - enumerate moduleFactories and instantiate each module in tests
+      - use fake AudioContext/GainNode objects for lifecycle tests
+      - call mount, render, start, connectAudio, disconnectAudio, serialize, hydrate, unmount
+      - record exceptions and missing ABI methods
+      - promote module-specific failures to targeted tests
+    emerging_tasks:
+      - add ModuleBase conformance helper reused by new modules
+      - create compatibility checklist for plugin modules
+  - id: high-03-archive-import-real-restore
+    title: Implement real project-archive import instead of placeholder warning
+    priority: high
+    status: todo
+    files_affected:
+      - src/core/project-io.js
+      - src/app.js
+      - tests/unit/project-io.test.js
+    desired_effects:
+      - uploaded .zip archives restore project.json
+      - archived WAV samples are connected to sampleRef users
+      - archive import is safe against malformed zip content
+    subtasks:
+      - add minimal stored-ZIP reader matching current createStoredZip output
+      - extract project.json into parseProjectPayload
+      - map samples/* assets to project assets by path
+      - reject absolute paths and .. traversal paths
+      - add invalid archive tests
+    emerging_tasks:
+      - consider using a maintained zip library if archive format scope grows
+      - support compressed ZIP entries or explicitly reject with clear message
+  - id: medium-01-dom-and-error-resilience
+    title: Harden app startup against missing DOM nodes and failed module render
+    priority: medium
+    status: todo
+    files_affected:
+      - src/app.js
+      - src/modules/*.js
+      - index.html
+    desired_effects:
+      - missing optional controls do not break bootstrap
+      - failed module UI renders report local error without stopping the app
+      - user can see import/audio/peer errors without opening devtools
+    subtasks:
+      - add queryRequired/queryOptional helper functions
+      - wrap module.mount and module.start with module id context
+      - add status/error banner region to index.html
+      - add tests with partial DOM fixture
+    emerging_tasks:
+      - define debug event protocol for diagnostics panel
+      - add exportable diagnostics JSON
+  - id: medium-02-performance-and-large-projects
+    title: Keep patch canvas and module rack responsive on large graphs
+    priority: medium
+    status: todo
+    files_affected:
+      - src/ui/patch-canvas.js
+      - style.css
+      - src/app.js
+    desired_effects:
+      - dragging nodes does not trigger excessive full DOM replacement
+      - large projects remain interactive
+    subtasks:
+      - throttle pointermove rendering with requestAnimationFrame
+      - preserve selected port state across render without visual flicker
+      - benchmark 50 modules and 100 edges
+      - add large graph unit/performance smoke fixture
+    emerging_tasks:
+      - switch to incremental DOM updates or Canvas/WebGL if SVG/HTML becomes too slow
+  - id: low-01-vite-vendor-warnings
+    title: Resolve or document vendor classic-script build warnings
+    priority: low
+    status: todo
+    files_affected:
+      - index.html
+      - vite.config.js
+      - vendor/peernet/*.js
+    desired_effects:
+      - production build warning is either gone or deliberately documented
+      - release process preserves required vendor globals
+    subtasks:
+      - inspect vendor scripts for global side effects
+      - decide whether they should remain classic scripts
+      - if classic scripts remain, document warning in roadmap and release notes
+      - if converted, add type module wrappers and compatibility tests
+    emerging_tasks:
+      - add build log assertion so new warnings are detected separately from accepted warnings
+
+full_sum_review:
+  current_risk_assessment:
+    critical:
+      - browser graph visual regression needs manual or automated browser validation after CSS fix
+      - route authority split between PatchBay packet routes and RoutingGraph audio edges remains confusing
+    high:
+      - project export likely omits graph audio edges and positions
+      - lifecycle conformance across all modules is not globally enforced
+      - archive imports intentionally do not restore zip contents yet
+    medium:
+      - DOM bootstrap assumes many selectors exist
+      - patch canvas drag uses full render on every pointermove
+    low:
+      - Vite vendor warnings are noisy but build succeeds
+  next_work_order:
+    - critical-01-rendered-graph-browser-smoke
+    - critical-02-canvas-route-authority
+    - high-01-project-export-completeness
+    - high-02-module-lifecycle-conformance
+    - high-03-archive-import-real-restore
+    - medium-01-dom-and-error-resilience
+    - medium-02-performance-and-large-projects
+    - low-01-vite-vendor-warnings

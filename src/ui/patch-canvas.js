@@ -11,13 +11,13 @@ export class PatchCanvas {
 
   render() {
     if (!this.root) return;
-    const data = this.graph.serialize();
+    const data = normalizeGraphForCanvas(this.graph.serialize());
     data.nodes.forEach((n, i) => {
       if (!this.positions.has(n.id))
         this.positions.set(n.id, { x: 24 + (i % 4) * 165, y: 24 + Math.floor(i / 4) * 110 });
     });
     const lines = data.edges.map((e) => this.edgePath(e)).join('');
-    this.root.innerHTML = `<div class="patch-canvas"><svg class="patch-lines">${lines}</svg><div class="patch-nodes">${data.nodes.map((n) => this.nodeHtml(n)).join('')}</div><div class="microcopy">Drag nodes. Click an output port then an input port to connect. Shift-click connected port pair to disconnect.</div></div>`;
+    this.root.innerHTML = `<div class="patch-canvas"><svg class="patch-lines" aria-hidden="true">${lines}</svg><div class="patch-nodes">${data.nodes.map((n) => this.nodeHtml(n)).join('')}</div><div class="microcopy">Drag nodes. Click an output port then an input port to connect. Shift-click connected port pair to disconnect.</div></div>`;
     this.root.querySelectorAll('.patch-node').forEach((node) => this.bindDrag(node));
     this.root
       .querySelectorAll('.patch-port')
@@ -85,9 +85,30 @@ export class PatchCanvas {
     this.render();
   }
 }
+function normalizeGraphForCanvas(data) {
+  const nodes = [...(data.nodes || [])];
+  const edges = [...(data.edges || [])];
+  const knownNodes = new Set(nodes.map((node) => node.id));
+  const missingNodeIds = new Set();
+  for (const edge of edges) {
+    if (edge.from && !knownNodes.has(edge.from)) missingNodeIds.add(edge.from);
+    if (edge.to && !knownNodes.has(edge.to)) missingNodeIds.add(edge.to);
+  }
+  for (const id of missingNodeIds) {
+    nodes.push({
+      id,
+      title: id === 'destination' ? 'Audio Out' : id,
+      kind: id === 'destination' ? 'system-output' : 'external',
+    });
+  }
+  return { ...data, nodes, edges };
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 }
 function escapeAttr(s) {
   return escapeHtml(s).replace(/"/g, '&quot;');
 }
+
+export const __patchCanvasTest = { normalizeGraphForCanvas, escapeHtml, escapeAttr };

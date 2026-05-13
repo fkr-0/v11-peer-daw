@@ -1,6 +1,7 @@
 // V11 Peer DAW/src/app.js
 // Main application module
 
+import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
 import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
@@ -35,7 +36,8 @@ class V11PeerDAW {
     this.urlParams = new URLSearchParams(window.location.search);
     this.sessionCode = this.urlParams.get('session') || null;
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
-    this.spectateMode = this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
+    this.spectateMode =
+      this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
     this.peerList = [];
   }
 
@@ -81,7 +83,12 @@ class V11PeerDAW {
 
     document.querySelector('#btnConnectPeer').addEventListener('click', () => {
       const username = document.querySelector('#pilotName').value || 'pilot';
-      this.peernet.start({ username, targetPeerId: this.targetPeerId, spectate: this.spectateMode, sessionCode: this.sessionCode });
+      this.peernet.start({
+        username,
+        targetPeerId: this.targetPeerId,
+        spectate: this.spectateMode,
+        sessionCode: this.sessionCode,
+      });
     });
 
     document.querySelector('#btnCreateSession').addEventListener('click', () => {
@@ -114,6 +121,8 @@ class V11PeerDAW {
 
     document.querySelector('#btnClearRoutes')?.addEventListener('click', () => {
       this.patchBay.routes = [];
+      this.routingGraph.clearEdges();
+      this.syncAudioGraph();
       this.renderRoutes();
       this.renderPatchCanvas();
       this.logText('All routes cleared');
@@ -204,12 +213,19 @@ class V11PeerDAW {
   }
 
   autoJoinFromUrl() {
-    if (this.urlParams.get('multiplayer') !== 'true' && !this.targetPeerId && !this.sessionCode) return;
-    const username = this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
+    if (this.urlParams.get('multiplayer') !== 'true' && !this.targetPeerId && !this.sessionCode)
+      return;
+    const username =
+      this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
     document.querySelector('#pilotName').value = username;
-    this.peernet.start({ username, targetPeerId: this.targetPeerId, spectate: this.spectateMode, sessionCode: this.sessionCode });
-    const target = this.targetPeerId ? ' for ' + this.targetPeerId : '';
-    this.logText((this.spectateMode ? 'observing' : 'joining') + ' peer session' + target);
+    this.peernet.start({
+      username,
+      targetPeerId: this.targetPeerId,
+      spectate: this.spectateMode,
+      sessionCode: this.sessionCode,
+    });
+    const target = this.targetPeerId ? ` for ${this.targetPeerId}` : '';
+    this.logText(`${this.spectateMode ? 'observing' : 'joining'} peer session${target}`);
   }
 
   bindPeernetStack() {
@@ -234,7 +250,9 @@ class V11PeerDAW {
   bindPatchCanvas() {
     // Initialize patch canvas if available
     if (typeof PatchCanvas === 'function') {
-      this.patchCanvas = new PatchCanvas(this.patchCanvasEl, this.patchBay, this.routingGraph);
+      this.patchCanvas = new PatchCanvas(this.patchCanvasEl, this.routingGraph, {
+        onChange: () => this.handlePatchGraphChange(),
+      });
     }
   }
 
@@ -258,9 +276,9 @@ class V11PeerDAW {
       module.outputs.some((p) => p.type === PortType.AUDIO) &&
       module !== this.mixer
     ) {
-      if (this.runtime.context) module.connectAudio(this.runtime.destination);
       this.routingGraph.connect(module.id, 'destination', 'audio');
       this.syncAudioGraph();
+      this.renderPatchCanvas();
       this.addMixerStrip(module);
     }
 
@@ -270,10 +288,6 @@ class V11PeerDAW {
   async startAudioModules() {
     for (const module of this.patchBay.modules.values()) {
       await module.start?.(this.runtime.context);
-      if (module.outputs?.some((p) => p.type === PortType.AUDIO) && module !== this.mixer) {
-        module.disconnectAudio?.();
-        module.connectAudio(this.runtime.destination);
-      }
     }
     this.syncAudioGraph();
   }
@@ -329,13 +343,29 @@ class V11PeerDAW {
   }
 
   renderRoutes() {
-    this.routesEl.innerHTML =
-      this.patchBay.routes
-        .map(
-          (route) => `
+    const packetRoutes = this.patchBay.routes
+      .map(
+        (route) => `
       <li><code>${route.from.moduleId}:${route.from.outputId}</code> → <code>${route.to.moduleId}:${route.to.inputId}</code></li>
     `
-        )
+      )
+      .join('');
+    const audioRoutes = this.routingGraph.edges
+      .filter((edge) => edge.type === 'audio')
+      .map(
+        (edge) => `
+      <li><code>${edge.from}:audio</code> ⇢ <code>${edge.to}:audio</code></li>
+    `
+      )
+      .join('');
+    this.routesEl.innerHTML =
+      [
+        packetRoutes && '<li class="dim">packet routes</li>',
+        packetRoutes,
+        audioRoutes && '<li class="dim">audio graph</li>',
+        audioRoutes,
+      ]
+        .filter(Boolean)
         .join('') || '<li class="dim">no routes yet</li>';
     this.updateStats();
   }
@@ -347,8 +377,16 @@ class V11PeerDAW {
   }
 
   updateStats() {
+    const audioRouteCount = this.routingGraph.edges.filter((edge) => edge.type === 'audio').length;
     document.querySelector('#moduleCount').textContent = `${this.patchBay.modules.size} modules`;
-    document.querySelector('#routeCount').textContent = `${this.patchBay.routes.length} routes`;
+    document.querySelector('#routeCount').textContent =
+      `${this.patchBay.routes.length} packet / ${audioRouteCount} audio routes`;
+  }
+
+  handlePatchGraphChange() {
+    this.syncAudioGraph();
+    this.renderRoutes();
+    this.updateStats();
   }
 
   async replaceWithPianoRoll(moduleId, pianoRollConfig) {
@@ -401,9 +439,16 @@ class V11PeerDAW {
   }
 
   syncAudioGraph() {
-    if (this.graphSync) {
-      this.graphSync.sync(this.patchBay, this.routingGraph);
+    if (!this.runtime.destination) return;
+    if (!this.graphSync) {
+      this.graphSync = new AudioGraphSync({
+        modules: this.patchBay.modules,
+        destination: this.runtime.destination,
+      });
     }
+    this.graphSync.modules = this.patchBay.modules;
+    this.graphSync.destination = this.runtime.destination;
+    this.graphSync.apply(this.routingGraph);
   }
 
   projectSource() {

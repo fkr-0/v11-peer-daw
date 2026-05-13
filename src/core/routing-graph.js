@@ -23,6 +23,9 @@ export class RoutingGraph {
   disconnect(from, to, type = 'audio') {
     this.edges = this.edges.filter((e) => !(e.from === from && e.to === to && e.type === type));
   }
+  clearEdges(type = null) {
+    this.edges = type ? this.edges.filter((edge) => edge.type !== type) : [];
+  }
   setChain(channelId, effects = []) {
     this.chains.set(channelId, [...effects]);
     return this.chains.get(channelId);

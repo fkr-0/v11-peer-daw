@@ -7,8 +7,14 @@ function copyStaticRuntimeAssets() {
     name: 'copy-static-runtime-assets',
     async closeBundle() {
       await Promise.all([
-        cp(join(process.cwd(), 'vendor'), join(process.cwd(), 'dist', 'vendor'), { recursive: true, force: true }),
-        cp(join(process.cwd(), 'docs'), join(process.cwd(), 'dist', 'docs'), { recursive: true, force: true }),
+        cp(join(process.cwd(), 'vendor'), join(process.cwd(), 'dist', 'vendor'), {
+          recursive: true,
+          force: true,
+        }),
+        cp(join(process.cwd(), 'docs'), join(process.cwd(), 'dist', 'docs'), {
+          recursive: true,
+          force: true,
+        }),
       ]);
     },
   };

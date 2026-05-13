@@ -18,7 +18,7 @@ export class MixerModule extends ModuleBase {
   }
 
   get destination() {
-    return this.runtime.destination;
+    return this.runtime?.destination || null;
   }
 
   render() {
@@ -28,8 +28,8 @@ export class MixerModule extends ModuleBase {
       <label>Master <input type="range" min="0" max="100" value="80" class="mini-input"></label>
       <p class="microcopy">Default sum bus. Submix modules may coexist and feed this master.</p>
     `;
-    this.root
-      .querySelector('input')
-      .addEventListener('input', (e) => this.runtime.setMasterVolume(Number(e.target.value) / 100));
+    this.root.querySelector('input').addEventListener('input', (e) => {
+      this.runtime?.setMasterVolume?.(Number(e.target.value) / 100);
+    });
   }
 }

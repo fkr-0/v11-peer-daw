@@ -6,9 +6,9 @@ export class AudioGraphSync {
     this.connections = [];
   }
   disconnectAll() {
-    for (const c of this.connections) {
+    for (const connection of this.connections) {
       try {
-        c.from.disconnectAudio?.(c.to.input || c.to);
+        connection.from.disconnectAudio?.();
       } catch (_) {}
     }
     this.connections = [];

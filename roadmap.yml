@@ -1,0 +1,188 @@
+project: v11-peer-daw
+updated: 2026-05-13
+purpose: >-
+  Reliability roadmap for robust modular DAW behavior across routing, audio graph
+  synchronization, project IO, collaboration, UI, and test infrastructure.
+status:
+  current_quality_gates:
+    unit_tests: "pnpm test -- --runInBand"
+    static_check: "pnpm check"
+    production_build: "pnpm build"
+  known_build_warnings:
+    vite_vendor_scripts:
+      severity: low
+      note: >-
+        Build succeeds, but Vite reports that vendor/peernet scripts referenced
+        from index.html are classic scripts and therefore cannot be bundled as
+        modules. Decide whether these are intentionally copied runtime globals or
+        should be migrated to module imports.
+
+tracks:
+  routing_and_audio_graph:
+    goal: >-
+      Make patch-canvas routes, RoutingGraph state, PatchBay packet routes, and
+      WebAudio node connections deterministic and mutually consistent.
+    tasks:
+      unify_route_models:
+        priority: high
+        subtasks:
+          - Define one canonical route schema with from.moduleId, from.outputId, to.moduleId, to.inputId, and type.
+          - Add conversion helpers between PatchBay packet routes and RoutingGraph audio edges.
+          - Ensure every connect/disconnect path updates both visual graph and runtime graph when appropriate.
+          - Add regression tests for add module, remove module, clear routes, autopatch, and imported routes.
+      audio_graph_sync_hardening:
+        priority: high
+        subtasks:
+          - Track per-edge connection handles where modules support granular disconnect.
+          - Prevent duplicate WebAudio connections after repeated start, import, and patch-canvas edits.
+          - Support effect-chain routing through input/output AudioNodes without reconnecting unrelated modules.
+          - Add browser smoke tests for start, stop, route edit, and remove module while audio is running.
+      patch_canvas_reliability:
+        priority: medium
+        subtasks:
+          - Persist node positions in project exports.
+          - Add keyboard-accessible connect/disconnect operations.
+          - Render separate port types for audio, midi, clock, and control instead of generic I/O ports.
+          - Add tests for selecting ports, disconnecting, clearing routes, and re-rendering after imports.
+
+  project_io:
+    goal: >-
+      Make save, load, import, export, and archive restore deterministic and safe
+      for all module families.
+    tasks:
+      archive_import:
+        priority: high
+        subtasks:
+          - Implement ZIP project.json extraction for project-archive imports.
+          - Rehydrate archive sample assets into sampler, drum sampler, and multisampler modules.
+          - Validate archive paths to prevent path traversal if ZIP extraction is added.
+          - Test clipboard archive payloads and file upload archive payloads separately.
+      schema_validation:
+        priority: high
+        subtasks:
+          - Add a project schema validator for version, type, modules, routes, and assets.
+          - Surface user-readable import errors instead of raw JSON/parser exceptions.
+          - Preserve forward-compatible unknown fields under module.extra or project.metadata.
+          - Add migration hooks for future schemaVersion values.
+      module_serialization_matrix:
+        priority: medium
+        subtasks:
+          - Create round-trip tests for every module factory in moduleFactories.
+          - Verify ids, titles, parameters, notes, pads, filters, and peer settings survive export/import.
+          - Add fixture projects for minimal, default rig, sample-heavy, and collaboration-heavy sessions.
+
+  modules:
+    goal: >-
+      Keep every module ABI-compatible and safe to start, stop, serialize,
+      hydrate, connect, disconnect, mount, and unmount repeatedly.
+    tasks:
+      lifecycle_contract:
+        priority: high
+        subtasks:
+          - Add shared lifecycle conformance tests for all ModuleBase subclasses.
+          - Verify start is idempotent and does not leak AudioNodes.
+          - Verify disconnectAudio does not throw when called before start or after stop.
+          - Verify unmount clears listeners or uses event delegation safely.
+      audio_modules:
+        priority: high
+        subtasks:
+          - Audit synth, sampler, drum sampler, multisampler, effects, and mixer modules for duplicate output connections.
+          - Standardize each module's input and output AudioNode naming.
+          - Add peak/clip safety limits for generated signals and sample playback.
+          - Test parameter changes under active playback.
+      sequencers_and_clock:
+        priority: medium
+        subtasks:
+          - Add deterministic scheduler tests with fake time for ClockModule and PianoRollModule.
+          - Verify swing, duration, velocity, and loop boundaries under tempo changes.
+          - Ensure stop resets transient playback state.
+      collaboration_modules:
+        priority: medium
+        subtasks:
+          - Define packet schemas for peer bridge control and midi messages.
+          - Add defensive validation for inbound peer packets.
+          - Add replay tests for remote route updates and project snapshots.
+
+  collaboration_and_storage:
+    goal: >-
+      Make peer sessions predictable, recoverable, and robust against stale or
+      malformed remote state.
+    tasks:
+      peernet_integration:
+        priority: medium
+        subtasks:
+          - Add integration tests with a fake PeernetStack event source.
+          - Verify presence, status, storage, and packet events update UI without throwing when DOM nodes are missing.
+          - Debounce high-volume packet logging to avoid UI stalls.
+      snapshot_consistency:
+        priority: medium
+        subtasks:
+          - Include routingGraph and patch-canvas positions in snapshots.
+          - Add snapshot version metadata and migration tests.
+          - Detect and report conflicts between local edits and remote snapshot apply.
+
+  ui_and_ux:
+    goal: >-
+      Keep the app usable and resilient when controls are missing, modules fail,
+      or browser APIs are unavailable.
+    tasks:
+      dom_safety:
+        priority: medium
+        subtasks:
+          - Guard all optional controls with null-safe access or explicit startup diagnostics.
+          - Add DOM fixture tests for init, bindChrome, bindPatchCanvas, and project controls.
+          - Provide visible error banners for failed audio init, peer init, and project import.
+      accessibility:
+        priority: low
+        subtasks:
+          - Add labels and ARIA state for patch ports, transport buttons, and module controls.
+          - Ensure keyboard navigation for module cards and route editing.
+          - Verify contrast and focus states in style.css.
+      performance:
+        priority: medium
+        subtasks:
+          - Throttle patch-canvas drag re-rendering with requestAnimationFrame.
+          - Cap event log rendering work and avoid excessive innerHTML updates.
+          - Add performance smoke tests for large projects with 50+ modules and 100+ routes.
+
+  build_and_vendor:
+    goal: >-
+      Make local dev, production build, artifact packaging, and vendor loading
+      reproducible and warning-free where possible.
+    tasks:
+      vite_vendor_warning_resolution:
+        priority: low
+        subtasks:
+          - Decide whether vendor/peernet scripts should remain copied classic scripts or become ESM imports.
+          - If globals are intentional, document the warning and keep copied vendor assets in release checks.
+          - If module migration is desired, add type="module" or import wrappers and verify global compatibility.
+      ci_gates:
+        priority: high
+        subtasks:
+          - Run pnpm check, pnpm test -- --runInBand, and pnpm build on every change.
+          - Add coverage thresholds for core graph, project IO, scheduler, and module lifecycle.
+          - Add browser smoke tests for booting index.html through Vite preview.
+      dependency_maintenance:
+        priority: low
+        subtasks:
+          - Pin package manager version in CI.
+          - Periodically audit peerjs, vite, jest, and biome updates.
+          - Keep generated dist out of source review unless release artifacts require it.
+
+  observability_and_debugging:
+    goal: >-
+      Make failures diagnosable without opening DevTools for common user-facing
+      actions.
+    tasks:
+      runtime_diagnostics:
+        priority: medium
+        subtasks:
+          - Add structured debug events for audio init, graph sync, project import, and peer connection attempts.
+          - Add a diagnostic panel summarizing modules, routes, graph edges, audio context state, and peer status.
+          - Include exportable diagnostic JSON for bug reports.
+      error_boundaries:
+        priority: medium
+        subtasks:
+          - Wrap module mount/render calls with module-specific error reporting.
+          - Prevent one broken module from stopping app bootstrap.
+          - Add test fixtures for modules that throw during mount, start, receive, or serialize.
