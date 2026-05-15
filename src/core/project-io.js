@@ -173,6 +173,9 @@ export function inferModuleType(moduleOrData) {
   if (name === 'ClockModule') return 'clock';
   if (name === 'CleanSynthModule') return 'cleansynth';
   if (name === 'PolySynthModule') return 'polysynth';
+  if (name === 'SubtractiveAnalogSynthModule') return 'analogsynth';
+  if (name === 'FmPhaseSynthModule') return 'fmsynth';
+  if (name === 'WavetableSynthModule') return 'wavetablesynth';
   if (name === 'DrumSynthModule') return 'drumsynth';
   if (name === 'ChannelStripModule') return 'channel';
   if (name === 'MixerModule') return 'master';

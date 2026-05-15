@@ -1,0 +1,107 @@
+version: 1
+project: v11-peer-daw
+feature_branch_scope: sample-library-and-missing-sample-sync
+status: in_progress
+requested_by_user: true
+updated_at: "2026-05-14T00:00:00.000Z"
+
+definition_of_done:
+  tests:
+    - unit tests cover sample library import/export/persistence/missing slot detection
+    - unit tests cover peer sample request/response/progress events
+    - unit tests cover sampler metadata BPM/cue generation serialization
+    - static UI tests cover project-level missing-slot and sample-library controls
+  build:
+    - pnpm test -- --runInBand passes
+    - pnpm build exits 0
+  browser_validation:
+    - app opens through agent-browser-cli
+    - project-level missing sample and sample library panels are visible
+    - no page errors are introduced by the new panels
+
+tasks:
+  - id: sample-library-core
+    title: Add reusable sample-library core
+    status: in_progress
+    subtasks:
+      - id: sample-library-core.model
+        status: todo
+        details:
+          - represent nested directories containing subdirectories and sample entries
+          - support mandatory filename and sampleLengthMs metadata
+          - support optional creator/artist/instrument/songTitle/tags/cues/slices/audio technical metadata
+      - id: sample-library-core.persistence
+        status: todo
+        details:
+          - import/export JSON snapshots
+          - load/save from localStorage-compatible storage
+          - merge peer libraries with peer source annotations
+      - id: sample-library-core.missing-slots
+        status: todo
+        details:
+          - detect missing sampler/drum/multisampler slots from serialized project/module state
+          - expose file name, sampleRef, module metadata, and fill state
+  - id: project-level-sample-ui
+    title: Add project-level used-sample state view and global sample-library UI
+    status: todo
+    subtasks:
+      - id: project-level-sample-ui.project-used-samples
+        status: todo
+        details:
+          - render one project-used-sample card per referenced project slot
+          - show sample/file name, module, sampleRef, length/type metadata when available
+          - state answers whether sample content is actually available as waveform/loaded soundfile
+          - missing/unavailable state can query peers and shows left-to-right fill progress
+      - id: project-level-sample-ui.local-fill
+        status: todo
+        details:
+          - allow replacing project slot by upload/file picker
+          - allow drag/drop of uploaded files onto project sample cards
+          - allow drag from global sample library entries onto project sample cards
+      - id: project-level-sample-ui.global-library-tree
+        status: todo
+        details:
+          - render a global sample-library directory tree above any one project
+          - upload files into global local library
+          - import/export JSON library data
+          - merge peer libraries into global library with source/peer metadata
+  - id: peer-sample-sync
+    title: Add peer sample retrieval protocol
+    status: todo
+    subtasks:
+      - id: peer-sample-sync.request
+        status: todo
+        details:
+          - missing card can query peers for a sampleRef/filename
+          - manager emits request events so the app can answer from local sample library
+      - id: peer-sample-sync.progress
+        status: todo
+        details:
+          - progress event updates card fill percentage
+          - completion marks slot filled and stores sample metadata/data locally
+  - id: sampler-metadata-tools
+    title: Add sampler metadata BPM and cue editing tools
+    status: todo
+    subtasks:
+      - id: sampler-metadata-tools.model
+        status: todo
+        details:
+          - serializer includes sample metadata, tags, cues, slices, bpm
+          - hydrate restores metadata without requiring audio data
+      - id: sampler-metadata-tools.bpm
+        status: todo
+        details:
+          - manually enter BPM
+          - tap BPM from timestamps
+          - derive BPM from interval declared as 0.5, 1, or 2 bars
+      - id: sampler-metadata-tools.cues
+        status: todo
+        details:
+          - add cues manually
+          - generate in-beat cues from upbeat and BPM
+          - support optional cue endMs/name/bpm fields
+      - id: sampler-metadata-tools.library-sync
+        status: todo
+        details:
+          - sampler can emit a sync-to-library event
+          - app stores/updates metadata in local sample library

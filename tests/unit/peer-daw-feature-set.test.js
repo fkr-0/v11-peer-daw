@@ -5,8 +5,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from '@jest/globals';
 import { PortType } from '../../src/core/contracts.js';
 import { moduleFactories, requiredPeerDawModules } from '../../src/modules/catalog.js';
+import { CleanSamplerModule } from '../../src/modules/clean-sampler.js';
 import { MultiSamplerModule } from '../../src/modules/multisampler.js';
-import { DrumSynthModule, PolySynthModule } from '../../src/modules/synths.js';
+import {
+  DrumSynthModule,
+  FmPhaseSynthModule,
+  PolySynthModule,
+  SubtractiveAnalogSynthModule,
+  WavetableSynthModule,
+} from '../../src/modules/synths.js';
 
 class FakeAudioParam {
   constructor(value = 0) {
@@ -67,6 +74,8 @@ class FakeAudioContext {
     const node = new FakeNode('oscillator');
     node.frequency = new FakeAudioParam(440);
     node.detune = new FakeAudioParam(0);
+    node.periodicWaves = [];
+    node.setPeriodicWave = (wave) => node.periodicWaves.push(wave);
     this.created.push(node);
     return node;
   }
@@ -82,6 +91,17 @@ class FakeAudioContext {
     node.playbackRate = new FakeAudioParam(1);
     this.created.push(node);
     return node;
+  }
+  createWaveShaper() {
+    const node = new FakeNode('waveShaper');
+    node.curve = null;
+    this.created.push(node);
+    return node;
+  }
+  createPeriodicWave(real, imag) {
+    const wave = { real, imag };
+    this.created.push({ kind: 'periodicWave', real, imag });
+    return wave;
   }
 }
 
@@ -108,6 +128,9 @@ describe('consolidated V11 peer DAW catalog', () => {
         'polysynth',
         'drumsynth',
         'multisampler',
+        'analogsynth',
+        'fmsynth',
+        'wavetablesynth',
       ])
     );
 
@@ -127,6 +150,38 @@ describe('consolidated V11 peer DAW catalog', () => {
     for (const key of requiredPeerDawModules) {
       expect(html).toContain(`value="${key}"`);
     }
+  });
+
+  test('peer session panel exposes sub-lobby multiplayer controls', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+
+    expect(html).toContain('id="subLobbyStatus"');
+    expect(html).toContain('id="btnHostSubLobby"');
+    expect(html).toContain('id="btnNewSubLobby"');
+    expect(html).toContain('id="btnCarrySubLobby"');
+    expect(html).toContain('id="blockIncomingJoin"');
+    expect(html).toContain('id="subLobbyPeerList"');
+  });
+
+  test('project level exposes missing-sample and sample-library panels', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+
+    expect(html).toContain('id="missingSampleSlots"');
+    expect(html).toContain('id="sampleLibraryTree"');
+    expect(html).toContain('id="sampleLibraryImportFile"');
+    expect(html).toContain('id="sampleLibraryUploadFile"');
+    expect(html).toContain('id="btnExportSampleLibrary"');
+    expect(html).toContain('id="sampleLibraryJson"');
+  });
+
+  test('arrangement design surface exposes automation, clips, arrangement, and composed preset controls', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+
+    expect(html).toContain('id="automationOperatorPanel"');
+    expect(html).toContain('id="clipSessionPanel"');
+    expect(html).toContain('id="arrangementTimelinePanel"');
+    expect(html).toContain('id="composedSoundscapePresetJson"');
+    expect(html).toContain('id="btnExportComposedSoundscapes"');
   });
 });
 
@@ -159,6 +214,132 @@ describe('synth modules', () => {
     expect(drum.lastHits.map((hit) => hit.voice)).toEqual(['kick', 'snare']);
     expect(ctx.created.some((node) => node.kind === 'oscillator')).toBe(true);
     expect(ctx.created.some((node) => node.kind === 'biquad')).toBe(true);
+  });
+
+  test('analog subtractive synth exposes oscillator mixer, filter, envelope, and drive', async () => {
+    const ctx = new FakeAudioContext();
+    const synth = new SubtractiveAnalogSynthModule({ id: 'analog-test', cutoff: 1400, resonance: 8 });
+    await synth.start(ctx);
+
+    synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'A4', velocity: 0.8 });
+
+    expect(synth.voices.size).toBe(1);
+    expect(synth.filter.type).toBe('lowpass');
+    expect(synth.filter.frequency.value).toBe(1400);
+    expect(synth.filter.Q.value).toBe(8);
+    expect(ctx.created.filter((node) => node.kind === 'oscillator')).toHaveLength(3);
+    expect(ctx.created.some((node) => node.kind === 'waveShaper')).toBe(true);
+    expect(synth.serialize()).toEqual(
+      expect.objectContaining({
+        moduleType: 'analogsynth',
+        oscillatorMix: expect.objectContaining({ saw: 0.65, square: 0.35, sub: 0.22 }),
+        cutoff: 1400,
+        resonance: 8,
+      })
+    );
+  });
+
+  test('FM/phase modulation synth connects modulator depth to carrier frequency and serializes ratios', async () => {
+    const ctx = new FakeAudioContext();
+    const synth = new FmPhaseSynthModule({ id: 'fm-test', carrierRatio: 1, modulatorRatio: 2, modulationIndex: 4 });
+    await synth.start(ctx);
+
+    synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'C4', velocity: 0.6 });
+
+    const oscillators = ctx.created.filter((node) => node.kind === 'oscillator');
+    expect(oscillators).toHaveLength(2);
+    expect(oscillators[0].frequency.value).toBeCloseTo(261.625, 2);
+    expect(oscillators[1].frequency.value).toBeCloseTo(523.25, 1);
+    expect(synth.voices.get('C4').modDepth.connections).toContain(oscillators[0].frequency);
+    expect(synth.serialize()).toEqual(
+      expect.objectContaining({
+        moduleType: 'fmsynth',
+        carrierRatio: 1,
+        modulatorRatio: 2,
+        modulationIndex: 4,
+        modulationMode: 'frequency',
+      })
+    );
+  });
+
+  test('wavetable synth builds periodic waves, morphs tables, and serializes table state', async () => {
+    const ctx = new FakeAudioContext();
+    const synth = new WavetableSynthModule({ id: 'wavetable-test', wavetable: 'bright', morph: 0.75 });
+    await synth.start(ctx);
+
+    synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'G4', velocity: 0.7 });
+
+    const oscillator = ctx.created.find((node) => node.kind === 'oscillator');
+    expect(oscillator.periodicWaves).toHaveLength(1);
+    expect(ctx.created.some((node) => node.kind === 'periodicWave')).toBe(true);
+    expect(synth.serialize()).toEqual(
+      expect.objectContaining({
+        moduleType: 'wavetablesynth',
+        wavetable: 'bright',
+        morph: 0.75,
+        tableSize: expect.any(Number),
+      })
+    );
+  });
+});
+
+describe('clean sampler metadata tools', () => {
+  test('serializes metadata, BPM, cues, generated beat cues, and emits sync-to-library', async () => {
+    const sampler = new CleanSamplerModule({ id: 'sampler-meta', fileName: 'loop.wav' });
+    const events = [];
+    sampler.addEventListener('sample-library-sync', (event) => events.push(event.detail));
+
+    sampler.setSampleMetadata({
+      sampleLengthMs: 4000,
+      type: 'audio/wav',
+      creator: 'Ada',
+      instrument: 'drums',
+      songTitle: 'Loop Lab',
+      tags: ['motown', 'drums'],
+    });
+    sampler.setBpm(120);
+    sampler.addCue({ startMs: 500, name: 'drop' });
+    sampler.generateInBeatCues({ startMs: 0, bpm: 120, beats: 4, upbeatMs: 25 });
+    sampler.syncMetadataToLibrary();
+
+    expect(sampler.serialize().sampleMetadata).toEqual(
+      expect.objectContaining({
+        filename: 'loop.wav',
+        sampleLengthMs: 4000,
+        type: 'audio/wav',
+        creator: 'Ada',
+        instrument: 'drums',
+        songTitle: 'Loop Lab',
+        tags: ['motown', 'drums'],
+        bpm: 120,
+      })
+    );
+    expect(sampler.serialize().sampleMetadata.cues).toEqual(
+      expect.arrayContaining([
+        { startMs: 500, name: 'drop' },
+        { startMs: 0, bpm: 120, upbeatMs: 25, name: 'beat 1' },
+      ])
+    );
+    expect(events[0].metadata.filename).toBe('loop.wav');
+    expect(events[0].moduleId).toBe('sampler-meta');
+  });
+
+  test('hydrates sampler metadata and derives BPM from tap and interval helpers', () => {
+    const sampler = new CleanSamplerModule({ id: 'sampler-hydrate' });
+
+    sampler.hydrate({
+      fileName: 'hydrated.wav',
+      sampleMetadata: {
+        filename: 'hydrated.wav',
+        sampleLengthMs: 2000,
+        cues: [{ startMs: 100, name: 'cue' }],
+      },
+    });
+    sampler.setBpmFromTaps([0, 500, 1000]);
+    expect(sampler.sampleMetadata.bpm).toBe(120);
+    sampler.setBpmFromInterval({ startMs: 0, endMs: 4000, bars: 2 });
+    expect(sampler.sampleMetadata.bpm).toBe(120);
+    expect(sampler.serialize().sampleMetadata.cues).toContainEqual({ startMs: 100, name: 'cue' });
   });
 });
 

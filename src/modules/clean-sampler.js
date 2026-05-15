@@ -1,6 +1,13 @@
 // PeerModGroove/src/modules/clean-sampler.js
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import {
+  createCue,
+  deriveBpmFromInterval,
+  generateBeatCues,
+  normalizeSampleMetadata,
+  tapTempoBpm,
+} from '../core/sample-library.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -34,6 +41,11 @@ export class CleanSamplerModule extends ModuleBase {
     this.decay = config.decay ?? 0.04;
     this.sustain = config.sustain ?? 0.85;
     this.release = config.release ?? 0.08;
+    this.sampleMetadata = normalizeSampleMetadata({
+      filename: this.fileName,
+      sampleLengthMs: config.sampleLengthMs || config.durationMs || 0,
+      ...(config.sampleMetadata || {}),
+    });
   }
 
   async start(context) {
@@ -49,6 +61,13 @@ export class CleanSamplerModule extends ModuleBase {
     const data = await file.arrayBuffer();
     this.buffer = await this.ctx.decodeAudioData(data);
     this.fileName = file.name;
+    this.setSampleMetadata({
+      filename: file.name,
+      sampleLengthMs: Math.round((this.buffer.duration || 0) * 1000),
+      sampleRate: this.buffer.sampleRate,
+      channels: this.buffer.numberOfChannels,
+      type: file.type || 'audio/*',
+    });
     this.render();
   }
 
@@ -110,6 +129,47 @@ export class CleanSamplerModule extends ModuleBase {
     return (Number(m[2]) + 1) * 12 + NOTE_NAMES.indexOf(m[1]);
   }
 
+  setSampleMetadata(metadata = {}) {
+    this.sampleMetadata = normalizeSampleMetadata({
+      ...this.sampleMetadata,
+      ...metadata,
+      filename: metadata.filename || this.fileName,
+    });
+    this.fileName = this.sampleMetadata.filename || this.fileName;
+    this.render();
+    return this.sampleMetadata;
+  }
+
+  setBpm(bpm) {
+    return this.setSampleMetadata({ bpm: Number(bpm) || 0 });
+  }
+
+  setBpmFromTaps(taps = []) {
+    return this.setBpm(tapTempoBpm(taps));
+  }
+
+  setBpmFromInterval(interval = {}) {
+    return this.setBpm(deriveBpmFromInterval(interval));
+  }
+
+  addCue(cue = {}) {
+    const next = createCue(cue);
+    this.setSampleMetadata({ cues: [...(this.sampleMetadata.cues || []), next] });
+    return next;
+  }
+
+  generateInBeatCues(options = {}) {
+    const cues = generateBeatCues(options);
+    this.setSampleMetadata({ cues: [...(this.sampleMetadata.cues || []), ...cues] });
+    return cues;
+  }
+
+  syncMetadataToLibrary() {
+    const detail = { moduleId: this.id, metadata: this.sampleMetadata };
+    this.dispatchEvent(new CustomEvent('sample-library-sync', { detail }));
+    return detail;
+  }
+
   setParam(target, value) {
     const setters = {
       rootNote: () => {
@@ -144,8 +204,24 @@ export class CleanSamplerModule extends ModuleBase {
     this.render();
   }
 
+  hasMeaningfulSampleMetadata() {
+    const placeholder = 'drop or choose an audio sample';
+    return Boolean(
+      this.sampleMetadata?.filename && this.sampleMetadata.filename !== placeholder ||
+        this.sampleMetadata?.sampleLengthMs > 0 ||
+        this.sampleMetadata?.bpm ||
+        this.sampleMetadata?.type ||
+        this.sampleMetadata?.creator ||
+        this.sampleMetadata?.instrument ||
+        this.sampleMetadata?.songTitle ||
+        this.sampleMetadata?.tags?.length ||
+        this.sampleMetadata?.cues?.length ||
+        this.sampleMetadata?.slices?.length
+    );
+  }
+
   serialize() {
-    return {
+    const base = {
       ...super.serialize(),
       fileName: this.fileName,
       params: {
@@ -160,10 +236,20 @@ export class CleanSamplerModule extends ModuleBase {
         timeShift: this.timeShift,
       },
     };
+    if (this.hasMeaningfulSampleMetadata()) {
+      base.sampleMetadata = this.sampleMetadata;
+      base.sampleRef = this.sampleMetadata?.sampleRef || `${this.id}/sample`;
+    }
+    return base;
   }
 
   hydrate(data = {}) {
     this.fileName = data.fileName || this.fileName;
+    this.sampleMetadata = normalizeSampleMetadata({
+      ...this.sampleMetadata,
+      ...(data.sampleMetadata || {}),
+      filename: data.sampleMetadata?.filename || this.fileName,
+    });
     for (const [key, value] of Object.entries(data.params || {})) this.setParam(key, value);
   }
 
@@ -217,8 +303,19 @@ export class CleanSamplerModule extends ModuleBase {
         <label>S <input class="mini-input" data-param="sustain" type="range" min="0" max="1" step="0.01" value="${this.sustain}"></label>
         <label>R <input class="mini-input" data-param="release" type="range" min="0.001" max="4" step="0.001" value="${this.release}"></label>
       </div>
+      <div class="effect-rack sampler-metadata-controls">
+        <label>BPM <input class="mini-input" data-sample-meta="bpm" type="number" min="1" max="400" step="0.01" value="${this.sampleMetadata.bpm || ''}"></label>
+        <label>Tags <input class="mini-input" data-sample-meta="tags" type="text" value="${(this.sampleMetadata.tags || []).join(', ')}" placeholder="flute, motown, full-song"></label>
+        <label>Creator <input class="mini-input" data-sample-meta="creator" type="text" value="${this.sampleMetadata.creator || ''}"></label>
+        <label>Instrument <input class="mini-input" data-sample-meta="instrument" type="text" value="${this.sampleMetadata.instrument || ''}"></label>
+        <label>Song <input class="mini-input" data-sample-meta="songTitle" type="text" value="${this.sampleMetadata.songTitle || ''}"></label>
+        <label>Cue ms <input class="mini-input" data-cue-start type="number" min="0" step="1" value="0"></label>
+        <button class="mini-button" data-add-cue type="button">ADD CUE</button>
+        <button class="mini-button" data-gen-beat-cues type="button">GEN BEAT CUES</button>
+        <button class="mini-button" data-sync-library type="button">SYNC METADATA TO LIBRARY</button>
+      </div>
       <button class="mini-button" data-play>PLAY ${this.rootNote}</button>
-      <p class="microcopy">One-shot sampler with waveform preview, time-shift, stretch/repitch, pitch offset, and ADSR.</p>
+      <p class="microcopy">One-shot sampler with waveform preview, time-shift, stretch/repitch, pitch offset, ADSR, BPM, tags, and cue metadata.</p>
     `;
     const input = this.root.querySelector('input[type=file]');
     const drop = this.root.querySelector('.drop-zone');
@@ -238,6 +335,23 @@ export class CleanSamplerModule extends ModuleBase {
       el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value));
       el.addEventListener('change', (e) => this.setParam(e.target.dataset.param, e.target.value));
     });
+    this.root.querySelectorAll('[data-sample-meta]').forEach((el) => {
+      el.addEventListener('change', (e) => {
+        const key = e.target.dataset.sampleMeta;
+        const value = key === 'tags' ? e.target.value.split(',').map((item) => item.trim()) : e.target.value;
+        this.setSampleMetadata({ [key]: value });
+      });
+    });
+    this.root.querySelector('[data-add-cue]')?.addEventListener('click', () => {
+      const startMs = Number(this.root.querySelector('[data-cue-start]')?.value || 0);
+      this.addCue({ startMs, bpm: this.sampleMetadata.bpm, name: `cue ${this.sampleMetadata.cues.length + 1}` });
+    });
+    this.root.querySelector('[data-gen-beat-cues]')?.addEventListener('click', () =>
+      this.generateInBeatCues({ startMs: 0, bpm: this.sampleMetadata.bpm || 120, beats: 4 })
+    );
+    this.root.querySelector('[data-sync-library]')?.addEventListener('click', () =>
+      this.syncMetadataToLibrary()
+    );
     this.root
       .querySelector('[data-play]')
       .addEventListener('click', () => this.play(this.rootNote, 0.9));

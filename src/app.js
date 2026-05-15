@@ -6,6 +6,15 @@ import { AudioRuntime } from './core/audio.js';
 import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
+import {
+  SAMPLE_PACKET_TYPES,
+  SampleLibrary,
+  SampleSyncManager,
+  detectProjectSampleUsage,
+  normalizeSampleMetadata,
+} from './core/sample-library.js';
+import { SubLobbyManager } from './core/sub-lobby-manager.js';
+import { PeernetLobby } from '../../peernetjs/peernet-lib.js';
 import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
 import { RoutingGraph } from './core/routing-graph.js';
 import { createDefaultPeerDawRig, moduleFactories } from './modules/catalog.js';
@@ -36,9 +45,23 @@ class V11PeerDAW {
     this.urlParams = new URLSearchParams(window.location.search);
     this.sessionCode = this.urlParams.get('session') || null;
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
-    this.spectateMode =
-      this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
+    this.spectateMode = this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
     this.peerList = [];
+    this.suppressProjectBroadcast = false;
+    this.sampleLibrary = new SampleLibrary();
+    this.sampleSyncProgress = new Map();
+    this.sampleSync = new SampleSyncManager({
+      library: this.sampleLibrary,
+      send: (packet) => this.sendSampleSyncPacket(packet),
+    });
+    this.subLobby = new SubLobbyManager({
+      username: 'pilot',
+      lobbyFactory: (lobbyId, opts) => new PeernetLobby(lobbyId, opts),
+      projectProvider: () => this.serializeRig(),
+      projectConsumer: (project) => this.applyRemoteProject(project),
+      autoCreateWhenAlone: false,
+      autoJoinOffers: true,
+    });
   }
 
   async init() {
@@ -49,6 +72,9 @@ class V11PeerDAW {
     this.bindPatchCanvas();
     this.bindPeernetStack();
     await this.bootstrapDefaultRig();
+    this.sampleLibrary.load();
+    this.bindSampleLibrary();
+    this.renderSamplePanels();
     this.autoJoinFromUrl();
   }
 
@@ -81,14 +107,17 @@ class V11PeerDAW {
       this.clock?.stop();
     });
 
-    document.querySelector('#btnConnectPeer').addEventListener('click', () => {
+    document.querySelector('#btnConnectPeer').addEventListener('click', async () => {
       const username = document.querySelector('#pilotName').value || 'pilot';
+      this.subLobby.setUsername(username);
+      await this.subLobby.connect();
       this.peernet.start({
         username,
         targetPeerId: this.targetPeerId,
         spectate: this.spectateMode,
         sessionCode: this.sessionCode,
       });
+      this.logText('visible in app-hub lobby as V11 DAW');
     });
 
     document.querySelector('#btnCreateSession').addEventListener('click', () => {
@@ -103,6 +132,29 @@ class V11PeerDAW {
     document.querySelector('#btnSaveSnapshot').addEventListener('click', () => {
       const snap = this.peernet.snapshot('Manual V11 Peer DAW Snapshot');
       if (snap) this.logText(`storage snapshot: ${snap.title}`);
+    });
+
+    document.querySelector('#blockIncomingJoin')?.addEventListener('change', (event) => {
+      this.subLobby.setBlockIncoming(Boolean(event.target.checked));
+      this.logText(`sub-lobby auto-join ${event.target.checked ? 'blocked' : 'open'}`);
+    });
+
+    document.querySelector('#btnHostSubLobby')?.addEventListener('click', async () => {
+      await this.ensureSubLobbyConnected();
+      await this.subLobby.createHostedSubLobby({ carryCurrentProject: true });
+      this.logText('hosted shared DAW sub-lobby');
+    });
+
+    document.querySelector('#btnNewSubLobby')?.addEventListener('click', async () => {
+      await this.ensureSubLobbyConnected();
+      await this.subLobby.createHostedSubLobby({ carryCurrentProject: false });
+      this.logText('spawned new empty DAW sub-lobby');
+    });
+
+    document.querySelector('#btnCarrySubLobby')?.addEventListener('click', async () => {
+      await this.ensureSubLobbyConnected();
+      await this.subLobby.createHostedSubLobby({ carryCurrentProject: true });
+      this.logText('spawned carried-project DAW sub-lobby');
     });
 
     document.querySelector('#addModule').addEventListener('change', async (e) => {
@@ -126,6 +178,7 @@ class V11PeerDAW {
       this.renderRoutes();
       this.renderPatchCanvas();
       this.logText('All routes cleared');
+      this.publishProjectChange('routes-cleared');
     });
 
     document.querySelector('#btnCopyProject')?.addEventListener('click', () => this.copyProject());
@@ -139,6 +192,29 @@ class V11PeerDAW {
       const file = event.target.files?.[0];
       if (file) this.importProjectFile(file);
       event.target.value = '';
+    });
+
+    document.querySelector('#sampleLibraryUploadFile')?.addEventListener('change', async (event) => {
+      await this.importSampleLibraryFiles(event.target.files || []);
+      event.target.value = '';
+    });
+    document.querySelector('#sampleLibraryImportFile')?.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (file) await this.importSampleLibraryJsonFile(file);
+      event.target.value = '';
+    });
+    document
+      .querySelector('#btnExportSampleLibrary')
+      ?.addEventListener('click', () => this.exportSampleLibraryJson());
+    document
+      .querySelector('#btnExportComposedSoundscapes')
+      ?.addEventListener('click', () => this.exportComposedSoundscapePresets());
+    document.querySelector('#sampleLibraryJson')?.addEventListener('change', (event) => {
+      const text = event.target.value.trim();
+      if (!text) return;
+      this.sampleLibrary.importSnapshot(JSON.parse(text)).save();
+      this.renderSamplePanels();
+      this.logText('global sample library JSON imported');
     });
   }
 
@@ -157,6 +233,193 @@ class V11PeerDAW {
         )
         .join('');
     }
+  }
+
+  async ensureSubLobbyConnected() {
+    if (this.subLobby.state.appHubConnected) return;
+    const username = document.querySelector('#pilotName')?.value || 'pilot';
+    this.subLobby.setUsername(username);
+    await this.subLobby.connect();
+  }
+
+  updateSubLobbyUI(state = this.subLobby.snapshot()) {
+    const statusEl = document.querySelector('#subLobbyStatus');
+    const listEl = document.querySelector('#subLobbyPeerList');
+    if (statusEl) {
+      const room = state.subLobbyId ? state.subLobbyId.replace('v11-peer-daw-sublobby-', '') : 'none';
+      statusEl.textContent = `sub-lobby: ${state.role} · ${room} · ${state.joinBlocked ? 'blocked' : 'open'}`;
+    }
+    if (listEl) {
+      const peers = [...(state.subLobbyPeers || new Map()).entries()];
+      listEl.innerHTML = peers.length
+        ? peers
+            .map(
+              ([id, peer]) =>
+                `<div class="peer-item"><span class="peer-dot"></span>${peer.username || id}</div>`
+            )
+            .join('')
+        : '<div class="peer-item dim">no sub-lobby peers yet</div>';
+    }
+    document.querySelector('#peerCount').textContent = `${state.peers?.size || 0} hub peers`;
+  }
+
+  bindSampleLibrary() {
+    this.sampleSync.on('progress', (event) => {
+      this.sampleSyncProgress.set(event.slotId, event);
+      if (event.progress >= 1) this.sampleLibrary.save();
+      this.renderProjectSampleUsage();
+      this.renderSampleLibraryTree();
+    });
+    document.querySelector('#missingSampleSlots')?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-sample-action]');
+      if (!button) return;
+      const slot = button.closest('[data-sample-slot]');
+      const slotId = slot?.dataset.sampleSlot || '';
+      const sampleRef = slot?.dataset.sampleRef || slotId;
+      const filename = slot?.dataset.filename || '';
+      if (button.dataset.sampleAction === 'query-peer') {
+        this.sampleSync.requestSample({ slotId, sampleRef, filename, peerId: '' });
+        this.sampleSyncProgress.set(slotId, { slotId, sampleRef, filename, progress: 0.05 });
+        this.renderProjectSampleUsage();
+        this.logText(`sample query requested: ${filename || sampleRef}`);
+      }
+      if (button.dataset.sampleAction === 'pick-upload') {
+        document.querySelector('#sampleLibraryUploadFile')?.click();
+      }
+    });
+  }
+
+  escapeHtml(value = '') {
+    return String(value).replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]);
+  }
+
+  async importSampleLibraryFiles(files) {
+    for (const file of Array.from(files || [])) {
+      this.sampleLibrary.addSample('/uploads', {
+        filename: file.name,
+        sampleLengthMs: 0,
+        type: file.type || 'application/octet-stream',
+        bytes: new Uint8Array(await file.arrayBuffer()),
+      });
+    }
+    this.sampleLibrary.save();
+    this.renderSamplePanels();
+    this.logText(`global sample library imported ${Array.from(files || []).length} file(s)`);
+  }
+
+  async importSampleLibraryJsonFile(file) {
+    this.sampleLibrary.importSnapshot(JSON.parse(await file.text())).save();
+    document.querySelector('#sampleLibraryJson').value = this.sampleLibrary.exportJson();
+    this.renderSamplePanels();
+    this.logText(`global sample library JSON loaded: ${file.name}`);
+  }
+
+  exportSampleLibraryJson() {
+    const text = this.sampleLibrary.exportJson();
+    document.querySelector('#sampleLibraryJson').value = text;
+    this.logText('global sample library JSON exported');
+  }
+
+  exportComposedSoundscapePresets() {
+    const text = exportComposedPresetBankJson();
+    document.querySelector('#composedSoundscapePresetJson').value = text;
+    this.logText('composed soundscape preset bank exported');
+  }
+
+  renderSamplePanels() {
+    this.renderSampleLibraryTree();
+    this.renderProjectSampleUsage();
+  }
+
+  renderSampleLibraryTree() {
+    const root = document.querySelector('#sampleLibraryTree');
+    if (!root) return;
+    const renderDir = (dir, depth = 0) => {
+      const sampleRows = (dir.samples || [])
+        .map(
+          (sample) =>
+            `<div class="sample-library-sample" draggable="true" data-sample-id="${this.escapeHtml(sample.id)}" style="margin-left:${depth * 10}px"><strong>${this.escapeHtml(sample.filename)}</strong><small>${this.escapeHtml(sample.sampleLengthMs || 0)}ms · ${this.escapeHtml(sample.type || sample.mime || 'audio')}</small><span class="pill">${this.escapeHtml(sample.source || 'local')}</span></div>`
+        )
+        .join('');
+      const childRows = (dir.dirs || []).map((child) => renderDir(child, depth + 1)).join('');
+      const label = dir.name === 'root' ? 'library' : dir.name;
+      return `<div class="sample-library-dir" style="margin-left:${depth * 8}px"><strong>/${this.escapeHtml(label)}</strong>${sampleRows}${childRows}</div>`;
+    };
+    root.innerHTML = renderDir(this.sampleLibrary.root);
+  }
+
+  renderProjectSampleUsage() {
+    const root = document.querySelector('#missingSampleSlots');
+    if (!root) return;
+    const project = this.serializeRig();
+    const usage = detectProjectSampleUsage(project, this.sampleLibrary).map((slot) => {
+      const progress = this.sampleSyncProgress.get(slot.id)?.progress;
+      return progress !== undefined ? { ...slot, availability: progress >= 1 ? 'available' : 'syncing', progress } : slot;
+    });
+    if (!usage.length) {
+      root.innerHTML = '<p class="microcopy">No project sample references yet.</p>';
+      return;
+    }
+    root.innerHTML = usage
+      .map((slot) => {
+        const progress = Math.round((slot.progress ?? (slot.availability === 'missing' ? 0 : 1)) * 100);
+        return `<article class="sample-slot-card state-${this.escapeHtml(slot.availability)}" data-sample-slot="${this.escapeHtml(slot.id)}" data-sample-ref="${this.escapeHtml(slot.sampleRef)}" data-filename="${this.escapeHtml(slot.filename)}" style="--sample-fill:${progress}%"><div class="sample-slot-fill"></div><strong>${this.escapeHtml(slot.filename)}</strong><small>${this.escapeHtml(slot.moduleTitle)} · ${this.escapeHtml(slot.sampleRef)}</small><span class="pill">${this.escapeHtml(slot.availability)}</span><span class="microcopy">${this.escapeHtml(slot.sampleLengthMs || '?')}ms · ${this.escapeHtml(slot.type || 'unknown type')}</span><div class="button-row"><button type="button" data-sample-action="query-peer">QUERY PEERS</button><button type="button" data-sample-action="pick-upload">UPLOAD / REPLACE</button></div></article>`;
+      })
+      .join('');
+  }
+
+  sendSampleSyncPacket(packet) {
+    this.subLobby?.subLobby?.broadcast?.({ type: packet.type, payload: packet.payload });
+  }
+
+  handleSubLobbySampleData(from, data = {}) {
+    if (data.type === SAMPLE_PACKET_TYPES.request) {
+      const sample =
+        this.sampleLibrary.findSample(data.payload?.sampleRef) ||
+        this.sampleLibrary.findSample(data.payload?.filename);
+      if (!sample) return;
+      const bytes = sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
+      this.subLobby?.subLobby?.broadcast?.({
+        type: SAMPLE_PACKET_TYPES.start,
+        payload: {
+          slotId: data.payload.slotId,
+          sampleRef: data.payload.sampleRef || sample.sampleRef,
+          filename: sample.filename,
+          totalBytes: bytes.length,
+          metadata: { ...sample, bytes: undefined },
+        },
+      });
+      if (bytes.length) {
+        this.subLobby?.subLobby?.broadcast?.({
+          type: SAMPLE_PACKET_TYPES.complete,
+          payload: { slotId: data.payload.slotId, bytes: Array.from(bytes) },
+        });
+      }
+      this.logText(`served sample to sub-lobby: ${sample.filename}`);
+    }
+    if (data.type === SAMPLE_PACKET_TYPES.start) this.sampleSync.receiveSampleStart(data.payload);
+    if (data.type === SAMPLE_PACKET_TYPES.chunk) {
+      this.sampleSync.receiveSampleChunk({
+        ...data.payload,
+        bytes: Uint8Array.from(data.payload?.bytes || []),
+      });
+    }
+    if (data.type === SAMPLE_PACKET_TYPES.complete) {
+      this.sampleSync.receiveSampleComplete({
+        ...data.payload,
+        bytes: Uint8Array.from(data.payload?.bytes || []),
+      });
+    }
+  }
+
+  syncModuleMetadataToSampleLibrary({ moduleId, metadata } = {}) {
+    const sample = this.sampleLibrary.addSample('/module-metadata', {
+      ...normalizeSampleMetadata(metadata || {}),
+      sampleRef: metadata?.sampleRef || `${moduleId}/sample`,
+    });
+    this.sampleLibrary.save();
+    this.renderSamplePanels();
+    this.logText(`synced sampler metadata to global library: ${sample.filename}`);
   }
 
   async bootstrapDefaultRig() {
@@ -218,6 +481,8 @@ class V11PeerDAW {
     const username =
       this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
     document.querySelector('#pilotName').value = username;
+    this.subLobby.setUsername(username);
+    this.subLobby.connect().catch((error) => this.logText(`app-hub lobby failed: ${error.message}`));
     this.peernet.start({
       username,
       targetPeerId: this.targetPeerId,
@@ -229,6 +494,17 @@ class V11PeerDAW {
   }
 
   bindPeernetStack() {
+    this.subLobby.on('state', (state) => this.updateSubLobbyUI(state));
+    this.subLobby.on('offer', (offer) => {
+      this.logText(
+        offer.joinBlocked
+          ? `sub-lobby offer blocked by ${offer.hostName || 'host'}`
+          : `joining sub-lobby from ${offer.hostName || 'host'}`
+      );
+    });
+    this.subLobby.on('project', ({ reason }) => this.logText(`remote project applied: ${reason}`));
+    this.subLobby.on('data', ({ from, data }) => this.handleSubLobbySampleData(from, data));
+
     this.peernet.addEventListener('status', (e) => {
       document.querySelector('#peerStatus').textContent = e.detail.text;
     });
@@ -268,6 +544,7 @@ class V11PeerDAW {
       '<button class="remove" title="remove module">×</button><div class="mount"></div>';
     this.modulesEl.appendChild(card);
     module.mount(card.querySelector('.mount'));
+    module.addEventListener?.('sample-library-sync', (event) => this.syncModuleMetadataToSampleLibrary(event.detail));
     card.querySelector('.remove').addEventListener('click', () => this.removeModule(module.id));
 
     if (this.runtime.context) await module.start(this.runtime.context);
@@ -283,6 +560,7 @@ class V11PeerDAW {
     }
 
     this.updateStats();
+    this.publishProjectChange('module-added');
   }
 
   async startAudioModules() {
@@ -301,6 +579,7 @@ class V11PeerDAW {
     this.renderPatchCanvas();
     this.renderRoutes();
     this.updateStats();
+    this.publishProjectChange('module-removed');
   }
 
   autopatch(module) {
@@ -515,6 +794,20 @@ class V11PeerDAW {
     this.logText(`project downloaded: ${pkg.filename}`);
   }
 
+  async applyRemoteProject(project) {
+    this.suppressProjectBroadcast = true;
+    try {
+      await this.rebuildRigFromProject(project);
+    } finally {
+      this.suppressProjectBroadcast = false;
+    }
+  }
+
+  publishProjectChange(reason = 'local-change') {
+    if (this.suppressProjectBroadcast) return;
+    this.subLobby.publishProjectChange(this.serializeRig(), reason);
+  }
+
   async rebuildRigFromProject(project) {
     for (const module of [...this.patchBay.modules.values()]) this.removeModule(module.id);
     this.patchBay.routes = [];
@@ -543,6 +836,7 @@ class V11PeerDAW {
     this.renderRoutes();
     this.renderPatchCanvas();
     this.updateStats();
+    this.publishProjectChange('project-rebuilt');
   }
 
   applyRig(payload) {

@@ -7,6 +7,7 @@ import {
   createMidiPacket,
   uid,
 } from '../core/contracts.js';
+import { createTheoryPattern } from '../core/music-theory-patterns.js';
 
 const SWING_AMOUNTS = Object.freeze({
   swing50: 0.5,
@@ -113,6 +114,10 @@ export class PianoRollModule extends ModuleBase {
       this.applySwingToClip({ amount: packet.amount, resolution: packet.resolution });
       return;
     }
+    if (packet.kind === PortType.CONTROL && packet.type === 'apply-theory-pattern') {
+      this.applyTheoryPattern(packet.pattern || {});
+      return;
+    }
     if (packet.kind !== PortType.CLOCK || packet.type !== 'step') return;
     const beat = ((packet.step || 0) * this.stepResolutionBeats) % this.lengthBeats;
     for (const note of this.notesAtBeat(beat)) this.emitNote(note, packet.at ?? 0);
@@ -121,6 +126,18 @@ export class PianoRollModule extends ModuleBase {
       .forEach((el) =>
         el.classList.toggle('active', Number(el.dataset.step) === packet.step % this.steps)
       );
+  }
+
+  applyTheoryPattern(pattern = {}) {
+    this.notes = createTheoryPattern(pattern).map(normalizeNote);
+    this.lengthBeats = Math.max(
+      this.stepResolutionBeats,
+      Number(pattern.lengthBeats || 0),
+      Number(pattern.beatsPerChord || 0) * Array.from(pattern.progression || []).length,
+      Math.ceil(Math.max(0, ...this.notes.map((note) => note.beat + note.duration)))
+    );
+    this.steps = Math.ceil(this.lengthBeats / this.stepResolutionBeats);
+    this.render();
   }
 
   notesAtBeat(beat) {

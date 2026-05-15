@@ -314,3 +314,133 @@ export class BpmBeatLooperModule extends EffectModule {
     this.nodes.wet?.gain.setTargetAtTime(this.wet, this.ctx.currentTime, 0.02);
   }
 }
+
+export class DelayModule extends EffectModule {
+  constructor(c = {}) {
+    super({ id: c.id || uid('delay'), title: c.title || 'Delay' });
+    this.description = 'Composable clean delay with time, feedback, tone, and wet controls.';
+    this.time = c.time ?? 0.28;
+    this.feedback = c.feedback ?? 0.32;
+    this.wet = c.wet ?? 0.35;
+    this.tone = c.tone ?? 4200;
+    this.params = [
+      { key: 'time', label: 'Time ', min: 0.01, max: 2, step: 0.01 },
+      { key: 'feedback', label: 'Feedback ', min: 0, max: 0.95, step: 0.01 },
+      { key: 'wet', label: 'Wet ', min: 0, max: 1, step: 0.01 },
+      { key: 'tone', label: 'Tone ', min: 200, max: 12000, step: 1 },
+    ];
+  }
+
+  build() {
+    const delay = this.ctx.createDelay(4);
+    const feedback = this.ctx.createGain();
+    const tone = this.ctx.createBiquadFilter();
+    const wet = this.ctx.createGain();
+    tone.type = 'lowpass';
+    this.nodes = { delay, feedback, tone, wet };
+    this.input.connect(this.output);
+    this.input.connect(delay);
+    delay.connect(tone);
+    tone.connect(feedback);
+    feedback.connect(delay);
+    tone.connect(wet);
+    wet.connect(this.output);
+  }
+
+  applyParams() {
+    this.nodes.delay?.delayTime.setTargetAtTime(this.time, this.ctx.currentTime, 0.02);
+    this.nodes.feedback?.gain.setTargetAtTime(this.feedback, this.ctx.currentTime, 0.02);
+    this.nodes.wet?.gain.setTargetAtTime(this.wet, this.ctx.currentTime, 0.02);
+    this.nodes.tone?.frequency.setTargetAtTime(this.tone, this.ctx.currentTime, 0.02);
+  }
+}
+
+export class BeatRepeatModule extends BpmBeatLooperModule {
+  constructor(c = {}) {
+    super({ ...c, id: c.id || uid('beatrepeat'), title: c.title || 'Beat Repeat' });
+    this.description = 'Composable beat-repeat delay/stutter effect.';
+  }
+}
+
+export class GrainDelayModule extends EffectModule {
+  constructor(c = {}) {
+    super({ id: c.id || uid('graindelay'), title: c.title || 'Grain Delay' });
+    this.description = 'Granular-style dual micro-delay texture with size, spray, feedback, and wet controls.';
+    this.grainSize = c.grainSize ?? 0.055;
+    this.spray = c.spray ?? 0.018;
+    this.feedback = c.feedback ?? 0.38;
+    this.wet = c.wet ?? 0.5;
+    this.params = [
+      { key: 'grainSize', label: 'Grain ', min: 0.005, max: 0.2, step: 0.001 },
+      { key: 'spray', label: 'Spray ', min: 0, max: 0.08, step: 0.001 },
+      { key: 'feedback', label: 'Feedback ', min: 0, max: 0.95, step: 0.01 },
+      { key: 'wet', label: 'Wet ', min: 0, max: 1, step: 0.01 },
+    ];
+  }
+
+  build() {
+    const grain = this.ctx.createDelay(1);
+    const spray = this.ctx.createDelay(1);
+    const feedback = this.ctx.createGain();
+    const wet = this.ctx.createGain();
+    this.nodes = { grain, spray, feedback, wet };
+    this.input.connect(this.output);
+    this.input.connect(grain);
+    grain.connect(spray);
+    spray.connect(feedback);
+    feedback.connect(grain);
+    spray.connect(wet);
+    wet.connect(this.output);
+  }
+
+  applyParams() {
+    this.nodes.grain?.delayTime.setTargetAtTime(this.grainSize, this.ctx.currentTime, 0.01);
+    this.nodes.spray?.delayTime.setTargetAtTime(this.grainSize + this.spray, this.ctx.currentTime, 0.01);
+    this.nodes.feedback?.gain.setTargetAtTime(this.feedback, this.ctx.currentTime, 0.02);
+    this.nodes.wet?.gain.setTargetAtTime(this.wet, this.ctx.currentTime, 0.02);
+  }
+}
+
+export class PitchShiftModule extends EffectModule {
+  constructor(c = {}) {
+    super({ id: c.id || uid('pitchshift'), title: c.title || 'Pitch Shift' });
+    this.description = 'Lightweight comb-delay pitch-shift approximation for composable chains.';
+    this.semitones = c.semitones ?? 0;
+    this.mix = c.mix ?? 0.55;
+    this.window = c.window ?? 0.04;
+    this.params = [
+      { key: 'semitones', label: 'Semi ', min: -24, max: 24, step: 1 },
+      { key: 'mix', label: 'Mix ', min: 0, max: 1, step: 0.01 },
+      { key: 'window', label: 'Window ', min: 0.01, max: 0.12, step: 0.001 },
+    ];
+  }
+
+  build() {
+    const shiftA = this.ctx.createDelay(1);
+    const shiftB = this.ctx.createDelay(1);
+    const lfo = this.ctx.createOscillator();
+    const depth = this.ctx.createGain();
+    const wet = this.ctx.createGain();
+    lfo.connect(depth);
+    depth.connect(shiftA.delayTime);
+    depth.connect(shiftB.delayTime);
+    lfo.start();
+    this.nodes = { shiftA, shiftB, lfo, depth, wet };
+    this.input.connect(this.output);
+    this.input.connect(shiftA);
+    this.input.connect(shiftB);
+    shiftA.connect(wet);
+    shiftB.connect(wet);
+    wet.connect(this.output);
+  }
+
+  applyParams() {
+    const ratio = Math.pow(2, this.semitones / 12);
+    const base = Math.max(0.001, this.window / Math.max(0.25, ratio));
+    this.nodes.shiftA?.delayTime.setTargetAtTime(base, this.ctx.currentTime, 0.01);
+    this.nodes.shiftB?.delayTime.setTargetAtTime(base * 1.5, this.ctx.currentTime, 0.01);
+    this.nodes.lfo?.frequency.setTargetAtTime(Math.max(0.1, Math.abs(this.semitones) * 0.15 + 0.3), this.ctx.currentTime, 0.02);
+    this.nodes.depth?.gain.setTargetAtTime(base * 0.5, this.ctx.currentTime, 0.02);
+    this.nodes.wet?.gain.setTargetAtTime(this.mix, this.ctx.currentTime, 0.02);
+  }
+}

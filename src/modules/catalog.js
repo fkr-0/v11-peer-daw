@@ -9,10 +9,14 @@ import { CleanSynthModule } from './clean-synth.js';
 import { ClockModule } from './clock.js';
 import { DrumSamplerModule } from './drum-sampler.js';
 import {
+  BeatRepeatModule,
   BpmBeatLooperModule,
+  DelayModule,
   DubEchoModule,
   FlangerModule,
+  GrainDelayModule,
   PhaserModule,
+  PitchShiftModule,
   ReverbModule,
   TapeEchoModule,
 } from './effects.js';
@@ -22,7 +26,13 @@ import { MultiSamplerModule } from './multisampler.js';
 import { OcraV11Module } from './ocra-v11.js';
 import { PeerBridgeModule } from './peer-bridge.js';
 import { PianoRollModule } from './piano-roll.js';
-import { DrumSynthModule, PolySynthModule } from './synths.js';
+import {
+  DrumSynthModule,
+  FmPhaseSynthModule,
+  PolySynthModule,
+  SubtractiveAnalogSynthModule,
+  WavetableSynthModule,
+} from './synths.js';
 
 export const requiredPeerDawModules = Object.freeze([
   'ocra',
@@ -34,6 +44,9 @@ export const requiredPeerDawModules = Object.freeze([
   'polysynth',
   'drumsynth',
   'multisampler',
+  'analogsynth',
+  'fmsynth',
+  'wavetablesynth',
 ]);
 
 export const moduleFactories = Object.freeze({
@@ -51,6 +64,9 @@ export const moduleFactories = Object.freeze({
   cleansynth: () => new CleanSynthModule(),
   polysynth: () => new PolySynthModule(),
   drumsynth: () => new DrumSynthModule(),
+  analogsynth: () => new SubtractiveAnalogSynthModule(),
+  fmsynth: () => new FmPhaseSynthModule(),
+  wavetablesynth: () => new WavetableSynthModule(),
   drumsampler: () => new DrumSamplerModule(),
   sampler: () => new CleanSamplerModule(),
   multisampler: () => new MultiSamplerModule(),
@@ -64,10 +80,14 @@ export const moduleFactories = Object.freeze({
   mixerdesk: () => new MixerDeskModule(),
   reverb: () => new ReverbModule(),
   dubecho: () => new DubEchoModule(),
+  delay: () => new DelayModule(),
   tapeecho: () => new TapeEchoModule(),
   flanger: () => new FlangerModule(),
   phaser: () => new PhaserModule(),
   beatlooper: () => new BpmBeatLooperModule(),
+  beatrepeat: () => new BeatRepeatModule(),
+  graindelay: () => new GrainDelayModule(),
+  pitchshift: () => new PitchShiftModule(),
 
   // Capture and peer collaboration
   field: () => new FieldRecorderModule(),
