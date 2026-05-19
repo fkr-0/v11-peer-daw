@@ -17,6 +17,7 @@ import { SubLobbyManager } from './core/sub-lobby-manager.js';
 import { PeernetLobby } from '../../peernetjs/peernet-lib.js';
 import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
 import { RoutingGraph } from './core/routing-graph.js';
+import { clonePeerDawExampleProject, peerDawExampleProjects } from './examples/peer-daw-example-projects.js';
 import { createDefaultPeerDawRig, moduleFactories } from './modules/catalog.js';
 import { PatchCanvas } from './ui/patch-canvas.js';
 
@@ -66,6 +67,7 @@ class V11PeerDAW {
 
   async init() {
     this.createStarfield();
+    this.bindExampleProjects();
     this.bindChrome();
     this.patchBay.addEventListener('packet', (e) => this.logPacket(e.detail));
     this.patchBay.addEventListener('route:add', () => this.renderRoutes());
@@ -76,6 +78,50 @@ class V11PeerDAW {
     this.bindSampleLibrary();
     this.renderSamplePanels();
     this.autoJoinFromUrl();
+  }
+
+  bindExampleProjects() {
+    const selector = document.querySelector('#exampleProjectSelect');
+    if (!selector) return;
+    selector.innerHTML = [
+      '<option value="">load tutorial example…</option>',
+      ...peerDawExampleProjects.map(
+        (example) => `<option value="${example.id}">${example.title}</option>`
+      ),
+    ].join('');
+    document.querySelector('#btnLoadExampleProject')?.addEventListener('click', () => {
+      this.loadExampleProject(selector.value);
+    });
+    document.querySelector('#btnStageExampleProject')?.addEventListener('click', () => {
+      this.stageExampleProject(selector.value);
+    });
+  }
+
+  exampleProjectText(example) {
+    return JSON.stringify(example, null, 2);
+  }
+
+  selectedExampleProject(exampleId) {
+    const id = exampleId || document.querySelector('#exampleProjectSelect')?.value;
+    return id ? clonePeerDawExampleProject(id) : null;
+  }
+
+  stageExampleProject(exampleId) {
+    const example = this.selectedExampleProject(exampleId);
+    if (!example) {
+      this.logText('choose an example set first');
+      return null;
+    }
+    document.querySelector('#projectIoText').value = this.exampleProjectText(example);
+    this.logText(`example staged: ${example.title}`);
+    return example;
+  }
+
+  async loadExampleProject(exampleId) {
+    const example = this.stageExampleProject(exampleId);
+    if (!example) return;
+    await this.rebuildRigFromProject(example);
+    this.logText(`example loaded: ${example.title}`);
   }
 
   createStarfield() {
@@ -763,8 +809,12 @@ class V11PeerDAW {
   async copyProject() {
     const pkg = await this.createProjectExport();
     document.querySelector('#projectIoText').value = pkg.text;
-    await navigator.clipboard?.writeText(pkg.text);
-    this.logText(`project copied: ${pkg.mode}`);
+    try {
+      await navigator.clipboard?.writeText?.(pkg.text);
+      this.logText(`project copied: ${pkg.mode}`);
+    } catch {
+      this.logText(`project export ready in text area: ${pkg.mode}`);
+    }
   }
 
   async pasteProject() {

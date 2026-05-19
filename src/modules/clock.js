@@ -41,6 +41,19 @@ export class ClockModule extends ModuleBase {
     this.root?.classList.remove('running');
   }
 
+  serialize() {
+    return {
+      ...super.serialize(),
+      moduleType: 'clock',
+      bpm: this.bpm,
+    };
+  }
+
+  hydrate(data = {}) {
+    this.bpm = Number(data.bpm) || this.bpm;
+    this.render();
+  }
+
   render() {
     if (!this.root) return;
     this.root.innerHTML = `

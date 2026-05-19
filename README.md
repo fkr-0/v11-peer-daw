@@ -23,6 +23,12 @@ pnpm dev
 # Build for production
 pnpm build
 
+# Run the local unit/build verification gate
+pnpm verify:build
+
+# Run the deploy-facing gate used by the app hub contract tests
+pnpm verify:deploy
+
 # Preview production build
 pnpm preview
 ```
@@ -91,6 +97,15 @@ The DAW uses a modular architecture where each audio component is a self-contain
 #### Networking
 - `peer` - Peer bridge for collaboration
 
+## Example Sets
+
+The Project I/O panel includes an **Example Sets** section with original tutorial rigs:
+
+- **Detroit Pocket Study — Conant Gardens cover workflow**: demonstrates a dusty swung clock, drum roll, filtered bass, electric-key stabs, echo routing, peer notes, and master output.
+- **Fall in Love Remix Sketch — original swing demo**: demonstrates longer-form remix sketching with shuffled drums, floating chords, FM counter-lines, filter automation, tape echo, and import/export.
+
+These examples are educational and royalty-free. They do not include Slum Village samples, recordings, lyrics, or note-for-note melody transcriptions. Use **STAGE JSON** to inspect the example in the Project I/O text area, or **LOAD EXAMPLE** to rebuild the rack directly.
+
 ## Development
 
 ### Code Quality
@@ -110,6 +125,18 @@ pnpm lint
 ```
 
 ### Building
+
+The build process has two useful gates:
+
+```bash
+# DAW-local gate: Jest unit tests plus Vite production bundle
+pnpm verify:build
+
+# Deploy-facing gate: DAW gate plus regenerated hub catalog and DAW deploy asset contracts
+pnpm verify:deploy
+```
+
+The hub deploy path builds `v11-peer-daw/dist`, includes that dist folder as the `v11-peer-daw` artifact target, then validates import paths and deploy assets from the root `tests/v11-peer-daw-*.test.mjs` contracts.
 
 The build process creates optimized bundles with code splitting:
 
