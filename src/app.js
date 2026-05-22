@@ -3,6 +3,7 @@
 
 import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
+import { Arrangement, Clip, ClipSlot } from './core/clips-arrangement.js';
 import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
@@ -36,6 +37,12 @@ class V11PeerDAW {
     this.patchCanvas = null;
     this.clock = null;
     this.mixer = null;
+    this.focusedModuleId = null;
+    this.currentBeat = 0;
+    this.mixerState = { masterVolume: 0.8, channels: {} };
+    this.clipSlotSequence = 1;
+    this.clipSlots = [];
+    this.arrangement = new Arrangement({ loopStartBeat: 0, loopEndBeat: 16 });
     this.peernet = new PeernetStack({
       namespace: 'v11-peer-daw',
       capture: () => this.serializeRig(),
@@ -47,7 +54,9 @@ class V11PeerDAW {
     this.sessionCode = this.urlParams.get('session') || null;
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
     this.spectateMode = this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
+    this.defaultSessionCode = this.urlParams.get('session') || 'V11-OPEN-STUDIO';
     this.peerList = [];
+    this.workspaceView = 'session';
     this.suppressProjectBroadcast = false;
     this.sampleLibrary = new SampleLibrary();
     this.sampleSyncProgress = new Map();
@@ -74,9 +83,13 @@ class V11PeerDAW {
     this.bindPatchCanvas();
     this.bindPeernetStack();
     await this.bootstrapDefaultRig();
+    this.ensureDefaultClipSlots();
     this.sampleLibrary.load();
     this.bindSampleLibrary();
     this.renderSamplePanels();
+    this.bindWorkspaceViews();
+    this.renderWorkspaceView();
+    await this.bootstrapDefaultPeernetSession();
     this.autoJoinFromUrl();
   }
 
@@ -154,15 +167,7 @@ class V11PeerDAW {
     });
 
     document.querySelector('#btnConnectPeer').addEventListener('click', async () => {
-      const username = document.querySelector('#pilotName').value || 'pilot';
-      this.subLobby.setUsername(username);
-      await this.subLobby.connect();
-      this.peernet.start({
-        username,
-        targetPeerId: this.targetPeerId,
-        spectate: this.spectateMode,
-        sessionCode: this.sessionCode,
-      });
+      await this.bootstrapDefaultPeernetSession({ force: true });
       this.logText('visible in app-hub lobby as V11 DAW');
     });
 
@@ -174,6 +179,8 @@ class V11PeerDAW {
         this.logText(`session created: ${session.title}`);
       }
     });
+
+    document.querySelector('#btnWorkspaceReset')?.addEventListener('click', () => this.setWorkspaceView('session'));
 
     document.querySelector('#btnSaveSnapshot').addEventListener('click', () => {
       const snap = this.peernet.snapshot('Manual V11 Peer DAW Snapshot');
@@ -264,21 +271,453 @@ class V11PeerDAW {
     });
   }
 
+  bindWorkspaceViews() {
+    document.querySelectorAll('[data-workspace-view]').forEach((button) => {
+      button.addEventListener('click', () => this.setWorkspaceView(button.dataset.workspaceView));
+    });
+    const workspace = document.querySelector('#workspaceMainView');
+    workspace?.addEventListener('click', (event) => {
+      const clipAction = event.target.closest('[data-clip-action]');
+      if (clipAction) {
+        this.handleClipAction(clipAction.dataset.clipAction, clipAction.dataset.slotId || '');
+        return;
+      }
+      const moduleAction = event.target.closest('[data-module-action]');
+      if (moduleAction) this.handleModuleAction(moduleAction.dataset.moduleAction, moduleAction);
+    });
+    workspace?.addEventListener('input', (event) => this.handleWorkspaceInput(event));
+    workspace?.addEventListener('change', (event) => this.handleWorkspaceInput(event));
+  }
+
+  setWorkspaceView(view) {
+    this.workspaceView = view || 'session';
+    document.querySelectorAll('[data-workspace-view]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.workspaceView === this.workspaceView);
+    });
+    this.renderWorkspaceView();
+  }
+
+  workspaceModules() {
+    return [...this.patchBay.modules.values()];
+  }
+
+  clipCapableModules() {
+    return this.workspaceModules().filter(
+      (module) =>
+        module.inputs?.some((p) => p.type === PortType.CLOCK || p.type === PortType.MIDI) ||
+        module.outputs?.some((p) => p.type === PortType.MIDI || p.type === PortType.CONTROL) ||
+        ['sequencer', 'ocra', 'pianoroll'].includes(module.kind)
+    );
+  }
+
+  makeClipSlot({ id, moduleId, title, note = 'C4', launchBeat = 0, stopBeat = null } = {}) {
+    const slotId = id || `slot-${this.clipSlotSequence++}`;
+    const module = this.patchBay.modules.get(moduleId) || this.clipCapableModules()[0];
+    const normalizedModuleId = module?.id || moduleId || 'unassigned';
+    const clip = new Clip({
+      id: `${slotId}-clip`,
+      name: title || `${module?.title || 'Clip'} Pattern`,
+      channelId: normalizedModuleId,
+      lengthBars: 1,
+      beatsPerBar: 4,
+      midi: [
+        { beat: 0, note, velocity: 0.85, duration: 1 },
+        { beat: 2, note: note === 'C4' ? 'G4' : note, velocity: 0.65, duration: 1 },
+      ],
+    });
+    const slot = new ClipSlot({ channelId: normalizedModuleId, quantizationBeats: 4, clip, launchBeat, stopBeat });
+    slot.id = slotId;
+    slot.moduleId = normalizedModuleId;
+    slot.name = clip.name;
+    return slot;
+  }
+
+  ensureDefaultClipSlots({ force = false } = {}) {
+    if (this.clipSlots.length && !force) return;
+    const capable = this.clipCapableModules();
+    this.clipSlotSequence = 1;
+    this.clipSlots = capable.slice(0, 4).map((module, index) =>
+      this.makeClipSlot({
+        id: `slot-${index + 1}`,
+        moduleId: module.id,
+        title: `${module.title} Clip`,
+        note: ['C4', 'D4', 'E4', 'G4'][index] || 'C4',
+        launchBeat: index === 0 ? 0 : null,
+      })
+    );
+  }
+
+  serializeMixerState() {
+    return {
+      masterVolume: this.mixerState.masterVolume,
+      channels: Object.fromEntries(
+        Object.entries(this.mixerState.channels).map(([id, channel]) => [id, { ...channel }])
+      ),
+    };
+  }
+
+  restoreMixerState(project = {}) {
+    const mixer = project.mixer || {};
+    this.mixerState = {
+      masterVolume: Number(mixer.masterVolume ?? this.mixerState?.masterVolume ?? 0.8),
+      channels: { ...(mixer.channels || {}) },
+    };
+    this.runtime.setMasterVolume?.(this.mixerState.masterVolume);
+  }
+
+  serializeClipState() {
+    return {
+      currentBeat: this.currentBeat,
+      slots: this.clipSlots.map((slot) => ({
+        id: slot.id,
+        moduleId: slot.moduleId,
+        name: slot.name,
+        channelId: slot.channelId,
+        quantizationBeats: slot.quantizationBeats,
+        launchBeat: slot.launchBeat,
+        stopBeat: slot.stopBeat,
+        clip: slot.clip?.serialize?.() || null,
+      })),
+    };
+  }
+
+  deserializeClipSlot(data = {}) {
+    const slot = new ClipSlot({
+      channelId: data.channelId || data.moduleId || 'channel-1',
+      quantizationBeats: data.quantizationBeats ?? 4,
+      clip: data.clip ? new Clip(data.clip) : null,
+      launchBeat: data.launchBeat ?? null,
+      stopBeat: data.stopBeat ?? null,
+    });
+    slot.id = data.id || `slot-${this.clipSlotSequence++}`;
+    slot.moduleId = data.moduleId || data.channelId || slot.channelId;
+    slot.name = data.name || slot.clip?.name || slot.id;
+    return slot;
+  }
+
+  restoreClipState(project = {}) {
+    const clipState = project.clips || {};
+    this.currentBeat = Number(clipState.currentBeat ?? project.currentBeat ?? 0);
+    this.clipSlots = Array.from(clipState.slots || project.clipSlots || []).map((slot) => this.deserializeClipSlot(slot));
+    this.clipSlotSequence = this.clipSlots.length + 1;
+    this.arrangement = new Arrangement(project.arrangement || { loopStartBeat: 0, loopEndBeat: 16 });
+    this.ensureDefaultClipSlots({ force: this.clipSlots.length === 0 });
+  }
+
+  handleClipAction(action, slotId) {
+    if (action === 'create') return this.createClipSlotForFocusedModule();
+    if (action === 'place-all') return this.placeAllClipsOnArrangement();
+    if (action === 'clear-arrangement') return this.clearArrangement();
+    const slot = this.clipSlots.find((item) => item.id === slotId);
+    if (!slot) return null;
+    if (action === 'launch') {
+      const beat = slot.queueLaunch(slot.clip, this.currentBeat);
+      this.logText(`clip launched at beat ${beat}: ${slot.name}`);
+    }
+    if (action === 'stop') {
+      const beat = slot.queueStop(this.currentBeat);
+      this.logText(`clip stop queued at beat ${beat}: ${slot.name}`);
+    }
+    if (action === 'place') this.placeSlotOnArrangement(slot.id);
+    if (action === 'delete') {
+      this.clipSlots = this.clipSlots.filter((item) => item.id !== slot.id);
+      this.logText(`clip slot removed: ${slot.name}`);
+    }
+    this.renderWorkspaceView();
+    this.publishProjectChange(`clip-${action}`);
+    return slot;
+  }
+
+  createClipSlotForFocusedModule() {
+    const focused = this.patchBay.modules.get(this.focusedModuleId) || this.clipCapableModules()[0];
+    const slot = this.makeClipSlot({
+      moduleId: focused?.id,
+      title: `${focused?.title || 'New'} Clip ${this.clipSlotSequence}`,
+      launchBeat: null,
+    });
+    this.clipSlots.push(slot);
+    this.logText(`clip slot created: ${slot.name}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('clip-created');
+    return slot;
+  }
+
+  placeSlotOnArrangement(slotId) {
+    const slot = this.clipSlots.find((item) => item.id === slotId);
+    if (!slot?.clip) return null;
+    const startBeat = this.arrangement.clips.length * 4;
+    const placement = this.arrangement.placeClip({ clip: slot.clip, startBeat, trackId: slot.moduleId || slot.channelId });
+    this.logText(`clip placed on arrangement: ${slot.name} @ beat ${startBeat}`);
+    return placement;
+  }
+
+  placeAllClipsOnArrangement() {
+    for (const slot of this.clipSlots) this.placeSlotOnArrangement(slot.id);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-place-all');
+  }
+
+  clearArrangement() {
+    this.arrangement = new Arrangement({ loopStartBeat: 0, loopEndBeat: 16 });
+    this.logText('arrangement cleared');
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-cleared');
+  }
+
+  noteNames() {
+    return ['C5','B4','A4','G4','F4','E4','D4','C4','B3','A3','G3','F3'];
+  }
+
+  renderPianoRollEditor(module) {
+    const notes = Array.isArray(module.notes) ? module.notes : [];
+    const noteNames = this.noteNames();
+    const steps = Math.max(8, Math.min(64, module.steps || Math.ceil((module.lengthBeats || 4) / (module.stepResolutionBeats || 0.25))));
+    const cells = noteNames.map((noteName) => `
+      <div class="piano-note-label">${this.escapeHtml(noteName)}</div>
+      ${Array.from({ length: steps }, (_, step) => {
+        const hasNote = notes.some((note) => note.note === noteName && Math.round(note.beat / module.stepResolutionBeats) === step);
+        return `<button type="button" class="piano-cell ${hasNote ? 'on' : ''}" data-module-action="toggle-note" data-module-id="${this.escapeHtml(module.id)}" data-note="${this.escapeHtml(noteName)}" data-step="${step}" title="${this.escapeHtml(noteName)} step ${step + 1}">${hasNote ? '●' : ''}</button>`;
+      }).join('')}
+    `).join('');
+    const noteRows = notes.map((note) => `<div class="workspace-row"><strong>${this.escapeHtml(note.note)}</strong><span>beat ${this.escapeHtml(note.beat)}</span><label>Velocity <input data-module-input="note-velocity" data-module-id="${this.escapeHtml(module.id)}" data-note-id="${this.escapeHtml(note.id)}" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(note.velocity)}"></label></div>`).join('');
+    return `<div class="piano-roll-editor"><div class="workspace-toolbar"><button type="button" data-module-action="add-note" data-module-id="${this.escapeHtml(module.id)}">ADD NOTE</button><button type="button" data-module-action="clear-notes" data-module-id="${this.escapeHtml(module.id)}">CLEAR NOTES</button><button type="button" data-module-action="apply-swing" data-module-id="${this.escapeHtml(module.id)}">APPLY SWING</button><span class="microcopy">${notes.length} notes · ${steps} steps · full-pane editor</span></div><div class="piano-grid" style="--steps:${steps}">${cells}</div><div class="workspace-list">${noteRows || '<p class="microcopy">No notes yet. Click grid cells or ADD NOTE.</p>'}</div></div>`;
+  }
+
+  ensureMixerChannel(module) {
+    const existing = this.mixerState.channels[module.id];
+    if (existing) return existing;
+    const state = {
+      id: module.id,
+      title: module.title,
+      gain: Number(module.gainValue ?? module.output?.gain?.value ?? 0.8),
+      pan: Number(module.panValue ?? 0),
+      muted: Boolean(module.muted ?? false),
+      solo: false,
+    };
+    this.mixerState.channels[module.id] = state;
+    return state;
+  }
+
+  mixerModules() {
+    return this.workspaceModules().filter((module) => module.outputs?.some((p) => p.type === PortType.AUDIO) || module.inputs?.some((p) => p.type === PortType.AUDIO) || module === this.mixer);
+  }
+
+  renderMixerEditor() {
+    const strips = this.mixerModules();
+    const rows = strips.map((module) => {
+      const channel = this.ensureMixerChannel(module);
+      return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label>Level <input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}"></label><label>Pan <input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
+    }).join('');
+    return `<div class="workspace-toolbar"><label>Master <input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}"></label><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
+  }
+
+  applyMixerChannel(moduleId) {
+    const module = this.patchBay.modules.get(moduleId);
+    const channel = this.mixerState.channels[moduleId];
+    if (!module || !channel) return;
+    if ('gainValue' in module) module.gainValue = channel.gain;
+    if ('panValue' in module) module.panValue = channel.pan;
+    if ('muted' in module) module.muted = channel.muted;
+    if (module.output?.gain && this.runtime.context) module.output.gain.setTargetAtTime(channel.muted ? 0 : channel.gain, this.runtime.context.currentTime, 0.01);
+    if (module.pan?.pan && this.runtime.context) module.pan.pan.setTargetAtTime(channel.pan, this.runtime.context.currentTime, 0.01);
+    module.apply?.();
+  }
+
+  handleWorkspaceInput(event) {
+    const input = event.target.closest('[data-module-input]');
+    if (!input) return;
+    const type = input.dataset.moduleInput;
+    const moduleId = input.dataset.moduleId;
+    if (type === 'master-volume') {
+      this.mixerState.masterVolume = Number(input.value);
+      this.runtime.setMasterVolume?.(this.mixerState.masterVolume);
+      this.publishProjectChange('mixer-master-volume');
+      return;
+    }
+    if (type === 'mixer-gain' || type === 'mixer-pan') {
+      const module = this.patchBay.modules.get(moduleId);
+      if (!module) return;
+      const channel = this.ensureMixerChannel(module);
+      if (type === 'mixer-gain') channel.gain = Number(input.value);
+      if (type === 'mixer-pan') channel.pan = Number(input.value);
+      this.applyMixerChannel(moduleId);
+      this.publishProjectChange(type);
+      return;
+    }
+    if (type === 'note-velocity') {
+      const module = this.patchBay.modules.get(moduleId);
+      const note = module?.notes?.find((candidate) => candidate.id === input.dataset.noteId);
+      if (!note) return;
+      note.velocity = Number(input.value);
+      module.render?.();
+      this.publishProjectChange('piano-note-velocity');
+    }
+  }
+
+  handleModuleAction(action, target) {
+    const moduleId = target.dataset.moduleId;
+    const module = this.patchBay.modules.get(moduleId);
+    if (!module) return;
+    if (action === 'focus-module') {
+      this.focusedModuleId = moduleId;
+      this.setWorkspaceView('module');
+      return;
+    }
+    if (action === 'toggle-mute' || action === 'toggle-solo') {
+      const channel = this.ensureMixerChannel(module);
+      if (action === 'toggle-mute') channel.muted = !channel.muted;
+      if (action === 'toggle-solo') channel.solo = !channel.solo;
+      this.applyMixerChannel(moduleId);
+      this.renderWorkspaceView();
+      this.publishProjectChange(action);
+      return;
+    }
+    if (action === 'toggle-note') {
+      const stepResolution = module.stepResolutionBeats || 0.25;
+      const beat = Number(target.dataset.step) * stepResolution;
+      const noteName = target.dataset.note;
+      const index = module.notes?.findIndex((note) => note.note === noteName && Math.round(note.beat / stepResolution) === Number(target.dataset.step));
+      if (index >= 0) module.notes.splice(index, 1);
+      else module.notes.push({ id: `note-${Date.now()}-${module.notes.length}`, kind: PortType.MIDI, type: 'note-on', beat, note: noteName, velocity: 0.8, duration: stepResolution * 2 });
+      module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('piano-note-toggle');
+      return;
+    }
+    if (action === 'add-note') {
+      module.notes = module.notes || [];
+      module.notes.push({ id: `note-${Date.now()}`, kind: PortType.MIDI, type: 'note-on', beat: 0, note: 'C4', velocity: 0.8, duration: module.stepResolutionBeats || 0.25 });
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('piano-note-added');
+      return;
+    }
+    if (action === 'clear-notes') {
+      module.notes = [];
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('piano-notes-cleared');
+      return;
+    }
+    if (action === 'apply-swing') {
+      module.applySwingToClip?.({ amount: 'swing60', resolution: '1/8' });
+      this.renderWorkspaceView();
+      this.publishProjectChange('piano-swing-applied');
+    }
+  }
+
+  moduleClipSummary(module) {
+    const serialized = module.serialize?.() || {};
+    const patterns = serialized.patterns || serialized.sequence || serialized.notes || serialized.steps || [];
+    const count = Array.isArray(patterns) ? patterns.length : Object.keys(patterns || {}).length;
+    return {
+      id: module.id,
+      title: module.title,
+      kind: module.kind,
+      count,
+      hasTransport: module.inputs?.some((p) => p.type === PortType.CLOCK) || module.outputs?.some((p) => p.type === PortType.CLOCK),
+    };
+  }
+
+  renderWorkspaceView() {
+    const root = document.querySelector('#workspaceMainView');
+    if (!root) return;
+    const modules = this.workspaceModules();
+    const activeSession = this.peernet.sessions?.getActiveSession?.();
+    const code = activeSession?.code || this.sessionCode || this.defaultSessionCode;
+    const routeCount = this.patchBay.routes.length;
+    const audioRoutes = this.routingGraph.edges.filter((edge) => edge.type === 'audio').length;
+    const view = this.workspaceView || 'session';
+    if (view === 'session') {
+      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${activeSession?.participants?.length || 1}</span><p class="microcopy">Local pilot plus connected peers are listed in Session Info.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'}</p></article></div>`;
+      return;
+    }
+    if (view === 'clips') {
+      this.ensureDefaultClipSlots();
+      const rows = this.clipSlots.map((slot) => {
+        const active = Boolean(slot.activeClipAt(this.currentBeat));
+        const module = this.patchBay.modules.get(slot.moduleId);
+        return `<div class="clip-slot-row ${active ? 'active' : ''}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">${this.escapeHtml(module?.title || slot.moduleId)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
+      }).join('');
+      root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="create">CREATE CLIP</button><button type="button" data-clip-action="place-all">PLACE ALL</button><button type="button" data-clip-action="clear-arrangement">CLEAR ARRANGEMENT</button><span class="microcopy">beat ${this.escapeHtml(this.currentBeat)} · ${this.clipSlots.length} slots · backed by ClipSlot/Clip core</span></div><div class="workspace-list">${rows || '<p class="microcopy">No clip slots yet. Add a piano roll, OCRA grid, or sequencer, then create a clip.</p>'}</div>`;
+      return;
+    }
+    if (view === 'arrangement') {
+      const placements = this.arrangement.clips;
+      const tracks = [...new Set(placements.map((placement) => placement.trackId))];
+      const lanes = tracks.length ? tracks : this.clipCapableModules().slice(0, 4).map((module) => module.id);
+      root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="place-all">PLACE ALL CLIPS</button><button type="button" data-clip-action="clear-arrangement">CLEAR</button><span class="microcopy">${placements.length} placements · loop ${this.arrangement.loopStartBeat}-${this.arrangement.loopEndBeat} beats</span></div>${lanes.map((trackId) => {
+        const module = this.patchBay.modules.get(trackId);
+        const trackClips = placements.filter((placement) => placement.trackId === trackId);
+        return `<div class="timeline-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track">${trackClips.map((placement) => `<span class="timeline-clip" style="left:${Math.min(92, placement.startBeat * 4)}%;width:${Math.max(10, placement.clip.lengthBeats * 4)}%">${this.escapeHtml(placement.clip.name)}</span>`).join('')}</div></div>`;
+      }).join('')}<p class="microcopy">Arrangement is now real state from Arrangement.placeClip() and is exported with the project.</p>`;
+      return;
+    }
+    if (view === 'mixer') {
+      root.innerHTML = this.renderMixerEditor();
+      return;
+    }
+    const focused = modules.find((module) => module.id === this.focusedModuleId) || modules.find((module) => module.id === document.querySelector('.module-card:hover')?.dataset.moduleId) || modules.find((module) => Array.isArray(module.notes)) || modules.find((module) => module.kind === 'midi-generator') || modules[0];
+    if (!focused) {
+      root.innerHTML = '<p class="microcopy">No module selected.</p>';
+      return;
+    }
+    const detail = focused.kind === 'midi-generator'
+      ? this.renderPianoRollEditor(focused)
+      : `<div class="module-focus"><article class="workspace-card"><strong>${this.escapeHtml(focused.title)}</strong><p class="microcopy">${this.escapeHtml(focused.kind)} · ${focused.inputs?.length || 0} inputs · ${focused.outputs?.length || 0} outputs</p></article><article class="workspace-card"><strong>Patch summary</strong><p class="microcopy">Incoming: ${this.patchBay.routes.filter((r) => r.to.moduleId === focused.id).length} · Outgoing: ${this.patchBay.routes.filter((r) => r.from.moduleId === focused.id).length}</p></article></div>`;
+    root.innerHTML = detail;
+  }
+
   updateSessionUI() {
     const codeEl = document.querySelector('#sessionCode');
     const listEl = document.querySelector('#peerList');
+    const activeSession = this.peernet.sessions?.getActiveSession?.();
+    const code = activeSession?.code || this.sessionCode || this.defaultSessionCode;
+    this.sessionCode = code;
 
-    if (this.sessionCode) {
-      codeEl.textContent = this.sessionCode;
-    }
+    if (codeEl) codeEl.textContent = code;
 
-    if (this.peerList.length > 0) {
-      listEl.innerHTML = this.peerList
-        .map(
-          (p) => `<div class="peer-item"><span class="peer-dot"></span>${p.name || 'peer'}</div>`
-        )
-        .join('');
+    const participants = activeSession?.participants || [];
+    const remotePeers = this.peerList.map((p) => ({
+      id: p.id || p.peerId || p.name || 'peer',
+      username: p.name || p.username || 'peer',
+      role: 'peer',
+    }));
+    const rows = [...participants, ...remotePeers];
+    if (listEl) {
+      listEl.innerHTML = rows.length
+        ? rows
+            .map(
+              (p) => `<div class="peer-item"><span class="peer-dot"></span>${this.escapeHtml(p.username || p.name || p.id || 'pilot')} <small>${this.escapeHtml(p.role || 'participant')}</small></div>`
+            )
+            .join('')
+        : '<div class="peer-item dim">local pilot waiting for peers</div>';
     }
+    this.renderWorkspaceView();
+  }
+
+  async bootstrapDefaultPeernetSession({ force = false } = {}) {
+    if (this.peernet.started && !force) return this.peernet.sessions?.getActiveSession?.() || null;
+    const username = this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
+    const pilotEl = document.querySelector('#pilotName');
+    if (pilotEl) pilotEl.value = username;
+    this.subLobby.setUsername(username);
+    this.peernet.start({
+      username,
+      targetPeerId: this.targetPeerId,
+      spectate: this.spectateMode,
+      sessionCode: this.defaultSessionCode,
+    });
+    const session = this.peernet.ensureSharedSession({
+      id: 'v11-peer-daw:open-studio',
+      code: this.defaultSessionCode,
+      title: 'V11 Open Studio Session',
+    });
+    this.sessionCode = session?.code || this.defaultSessionCode;
+    this.updateSessionUI();
+    this.logText(`default shared session ready: ${this.sessionCode}`);
+    return session;
   }
 
   async ensureSubLobbyConnected() {
@@ -587,11 +1026,15 @@ class V11PeerDAW {
     card.className = `module-card kind-${module.kind}`;
     card.dataset.moduleId = module.id;
     card.innerHTML =
-      '<button class="remove" title="remove module">×</button><div class="mount"></div>';
+      '<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div><div class="mount"></div>';
     this.modulesEl.appendChild(card);
     module.mount(card.querySelector('.mount'));
     module.addEventListener?.('sample-library-sync', (event) => this.syncModuleMetadataToSampleLibrary(event.detail));
     card.querySelector('.remove').addEventListener('click', () => this.removeModule(module.id));
+    card.querySelector('.focus').addEventListener('click', () => {
+      this.focusedModuleId = module.id;
+      this.setWorkspaceView('module');
+    });
 
     if (this.runtime.context) await module.start(this.runtime.context);
     if (
@@ -606,6 +1049,7 @@ class V11PeerDAW {
     }
 
     this.updateStats();
+    this.renderWorkspaceView();
     this.publishProjectChange('module-added');
   }
 
@@ -625,6 +1069,7 @@ class V11PeerDAW {
     this.renderPatchCanvas();
     this.renderRoutes();
     this.updateStats();
+    this.renderWorkspaceView();
     this.publishProjectChange('module-removed');
   }
 
@@ -693,6 +1138,7 @@ class V11PeerDAW {
         .filter(Boolean)
         .join('') || '<li class="dim">no routes yet</li>';
     this.updateStats();
+    this.renderWorkspaceView();
   }
 
   renderPatchCanvas() {
@@ -706,6 +1152,7 @@ class V11PeerDAW {
     document.querySelector('#moduleCount').textContent = `${this.patchBay.modules.size} modules`;
     document.querySelector('#routeCount').textContent =
       `${this.patchBay.routes.length} packet / ${audioRouteCount} audio routes`;
+    this.renderWorkspaceView();
   }
 
   handlePatchGraphChange() {
@@ -780,6 +1227,10 @@ class V11PeerDAW {
     return {
       modules: [...this.patchBay.modules.values()],
       routes: this.patchBay.routes,
+      clips: this.serializeClipState(),
+      arrangement: this.arrangement.serialize(),
+      mixer: this.serializeMixerState(),
+      mixer: this.serializeMixerState(),
     };
   }
 
@@ -795,6 +1246,8 @@ class V11PeerDAW {
           }
       ),
       routes: this.patchBay.routes,
+      clips: this.serializeClipState(),
+      arrangement: this.arrangement.serialize(),
     };
   }
 
@@ -865,6 +1318,8 @@ class V11PeerDAW {
     this.bindPatchCanvas();
     this.mixer = null;
     this.clock = null;
+    this.restoreClipState(project);
+    this.restoreMixerState(project);
 
     for (const moduleData of project.modules || []) {
       const type = moduleData.moduleType || moduleData.kind;
@@ -885,7 +1340,9 @@ class V11PeerDAW {
     }
     this.renderRoutes();
     this.renderPatchCanvas();
+    this.ensureDefaultClipSlots();
     this.updateStats();
+    this.renderWorkspaceView();
     this.publishProjectChange('project-rebuilt');
   }
 

@@ -186,6 +186,18 @@
       </aside>
 
       <section class="panel rack">
+        <div class="workspace-view-shell">
+          <div class="workspace-tabs" role="tablist" aria-label="DAW workspace views">
+            <button class="workspace-tab active" data-workspace-view="session" type="button">Session</button>
+            <button class="workspace-tab" data-workspace-view="clips" type="button">Clips</button>
+            <button class="workspace-tab" data-workspace-view="arrangement" type="button">Arrangement</button>
+            <button class="workspace-tab" data-workspace-view="mixer" type="button">Mixer</button>
+            <button class="workspace-tab" data-workspace-view="module" type="button">Module</button>
+            <button id="btnWorkspaceReset" class="workspace-reset" type="button" title="Return to session view">Reset View</button>
+          </div>
+          <div id="workspaceMainView" class="workspace-main-view" aria-live="polite"></div>
+        </div>
+
         <div class="patch-canvas-container">
           <div class="patch-canvas-header">
             <h2>Visual Patch Canvas</h2>

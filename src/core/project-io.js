@@ -295,6 +295,9 @@ function createProject(source, { mode }) {
     exportedAt: new Date(0).toISOString(),
     modules,
     routes: Array.from(source.routes || []),
+    clips: source.clips || { currentBeat: 0, slots: [] },
+    arrangement: source.arrangement || { loopStartBeat: 0, loopEndBeat: 0, clips: [] },
+    mixer: source.mixer || { masterVolume: 0.8, channels: {} },
     assets:
       mode === 'inline-samples-project' ? assets.map(({ bytes: _bytes, ...asset }) => asset) : [],
   };

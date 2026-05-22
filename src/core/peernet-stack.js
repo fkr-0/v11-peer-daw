@@ -83,6 +83,9 @@ export class PeernetStack extends EventTarget {
     this.core?.on('hub:ready', (payload) =>
       this.emit('status', { text: `hosting:${payload.id}`, connected: true })
     );
+    this.core?.on('error', (payload) =>
+      this.emit('status', { text: `peer warning:${payload?.type || payload?.message || 'unavailable'}`, connected: false, warning: true })
+    );
     this.core?.on('peers', (peers) => this.emit('peers', peers || []));
     this.core?.on('message:pmg-packet', (payload) => this.emit('packet', payload?.data || payload));
     this.core?.on('message:pmg-patch', (payload) => this.emit('patch', payload?.data || payload));
@@ -127,6 +130,25 @@ export class PeernetStack extends EventTarget {
 
   createSession(title = 'PeerModGroove Session') {
     return this.sessions?.createSession({ title, app: 'PeerModGroove' }, this.capture());
+  }
+
+  ensureSharedSession({ id = `${this.namespace}:default-session`, code = 'V11-OPEN-STUDIO', title = 'V11 Open Studio Session' } = {}) {
+    if (!this.sessions) return null;
+    const existing = this.sessions.sessions.find((session) => session.id === id);
+    if (existing) {
+      this.sessions.joinSession(existing);
+      return this.sessions.getActiveSession();
+    }
+    const session = this.sessions.createSession({ title, app: 'V11 Peer DAW' }, this.capture());
+    session.id = id;
+    session.code = code;
+    session.title = title;
+    session.mode = 'open-collab';
+    session.updatedAt = Date.now();
+    this.sessions.activeSessionId = id;
+    this.sessions.save();
+    this.sessions.announceUpdate(session);
+    return session;
   }
 
   snapshot(title = 'Manual PeerModGroove Snapshot') {
