@@ -33,7 +33,6 @@ export default defineConfig({
         chunkFileNames: 'assets/[name].[hash].js',
         assetFileNames: 'assets/[name].[hash].[ext]',
         manualChunks: {
-          'vendor-peerjs': ['peerjs'],
           'vendor-peernet': ['./src/core/peernet-stack.js'],
           'core-audio': ['./src/core/audio.js', './src/core/patchbay.js'],
           'ui-patch': ['./src/ui/patch-canvas.js'],

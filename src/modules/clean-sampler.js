@@ -224,6 +224,7 @@ export class CleanSamplerModule extends ModuleBase {
     const base = {
       ...super.serialize(),
       fileName: this.fileName,
+      waveformEdit: this.waveformEdit ? { ...this.waveformEdit } : undefined,
       params: {
         attack: this.attack,
         decay: this.decay,
@@ -250,6 +251,7 @@ export class CleanSamplerModule extends ModuleBase {
       ...(data.sampleMetadata || {}),
       filename: data.sampleMetadata?.filename || this.fileName,
     });
+    this.waveformEdit = data.waveformEdit ? { ...data.waveformEdit } : this.waveformEdit;
     for (const [key, value] of Object.entries(data.params || {})) this.setParam(key, value);
   }
 

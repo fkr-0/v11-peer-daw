@@ -20,14 +20,37 @@ export class PeerBridgeModule extends ModuleBase {
     });
     this.lobbyId = config.lobbyId || 'peermodgroove-alpha';
     this.lobby = null;
-    this.status = 'offline';
+    this.status = config.status || 'offline';
+    this.lastPilot = config.lastPilot || 'pilot';
+    this.packetLog = Array.isArray(config.packetLog) ? config.packetLog.map((packet) => ({ ...packet })) : [];
   }
 
   receive(packet, inputId) {
+    this.packetLog.push({ ...packet, inputId, at: Date.now() });
+    this.packetLog = this.packetLog.slice(-32);
     this.lobby?.broadcast({ type: 'pmg-packet', inputId, packet });
   }
 
+  serialize() {
+    return {
+      ...super.serialize(),
+      lobbyId: this.lobbyId,
+      status: this.status,
+      lastPilot: this.lastPilot,
+      packetLog: this.packetLog.slice(-32),
+    };
+  }
+
+  hydrate(data = {}) {
+    this.lobbyId = data.lobbyId || this.lobbyId;
+    this.status = data.status || this.status;
+    this.lastPilot = data.lastPilot || this.lastPilot;
+    this.packetLog = Array.isArray(data.packetLog) ? data.packetLog.slice(-32) : this.packetLog;
+    this.render();
+  }
+
   async connect(username = 'pilot') {
+    this.lastPilot = username;
     this.lobby = new PeernetLobby(this.lobbyId, { debug: false });
     this.lobby.addEventListener('status', (e) => {
       this.status = e.detail.text;
@@ -44,7 +67,7 @@ export class PeerBridgeModule extends ModuleBase {
     if (!this.root) return;
     this.root.innerHTML = `
       <div class="module-head"><span>⌁</span><strong>${this.title}</strong><small>PEER CONTROL</small></div>
-      <input class="mini-input" placeholder="pilot name" value="pilot">
+      <input class="mini-input" placeholder="pilot name" value="${this.lastPilot || 'pilot'}">
       <button class="mini-button">CONNECT</button>
       <p class="microcopy">Status: ${this.status}. Broadcasts JSON-safe midi/control packets.</p>
     `;

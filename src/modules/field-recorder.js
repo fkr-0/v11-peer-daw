@@ -16,7 +16,9 @@ export class FieldRecorderModule extends ModuleBase {
     });
     this.output = null;
     this.buffer = null;
-    this.fileName = 'no sample loaded';
+    this.fileName = config.fileName || 'no sample loaded';
+    this.takes = Array.isArray(config.takes) ? config.takes.map((take) => ({ ...take })) : [];
+    this.waveformEdit = config.waveformEdit ? { ...config.waveformEdit } : null;
   }
 
   async start(context) {
@@ -40,6 +42,22 @@ export class FieldRecorderModule extends ModuleBase {
     src.buffer = this.buffer;
     src.connect(this.output);
     src.start();
+  }
+
+  serialize() {
+    return {
+      ...super.serialize(),
+      fileName: this.fileName,
+      takes: this.takes.map((take) => ({ ...take })),
+      waveformEdit: this.waveformEdit ? { ...this.waveformEdit } : undefined,
+    };
+  }
+
+  hydrate(data = {}) {
+    this.fileName = data.fileName || this.fileName;
+    this.takes = Array.isArray(data.takes) ? data.takes.map((take) => ({ ...take })) : this.takes;
+    this.waveformEdit = data.waveformEdit ? { ...data.waveformEdit } : this.waveformEdit;
+    this.render();
   }
 
   connectAudio(destination) {

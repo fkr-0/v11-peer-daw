@@ -58,6 +58,15 @@ class V11PeerDAW {
     this.peerList = [];
     this.workspaceView = 'session';
     this.suppressProjectBroadcast = false;
+    this.clientId = `v11-client-${Math.random().toString(36).slice(2, 10)}`;
+    this.localProjectVersion = 0;
+    this.localSessionPeers = new Map();
+    this.localSessionBus = null;
+    this.gridSelection = new Set();
+    this.gridDrag = null;
+    this.gridClipboard = [];
+    this.waveformEdits = new Map();
+    this.arrangementDrag = null;
     this.sampleLibrary = new SampleLibrary();
     this.sampleSyncProgress = new Map();
     this.sampleSync = new SampleSyncManager({
@@ -90,7 +99,59 @@ class V11PeerDAW {
     this.bindWorkspaceViews();
     this.renderWorkspaceView();
     await this.bootstrapDefaultPeernetSession();
+    this.bindLocalSessionBus();
     this.autoJoinFromUrl();
+  }
+
+  bindLocalSessionBus() {
+    if (this.localSessionBus || !('BroadcastChannel' in window)) return;
+    this.localSessionBus = new BroadcastChannel(`v11-peer-daw:${this.defaultSessionCode}`);
+    this.localSessionBus.addEventListener('message', (event) => this.handleLocalSessionMessage(event.data || {}));
+    this.announceLocalSessionPresence('join');
+    window.addEventListener('beforeunload', () => this.announceLocalSessionPresence('leave'));
+  }
+
+  announceLocalSessionPresence(kind = 'presence') {
+    if (!this.localSessionBus) return;
+    this.localSessionBus.postMessage({
+      type: 'presence',
+      kind,
+      clientId: this.clientId,
+      username: document.querySelector('#pilotName')?.value || 'pilot',
+      sessionCode: this.defaultSessionCode,
+      at: Date.now(),
+    });
+  }
+
+  handleLocalSessionMessage(message = {}) {
+    if (!message || message.clientId === this.clientId || message.sessionCode !== this.defaultSessionCode) return;
+    if (message.type === 'presence') {
+      if (message.kind === 'leave') this.localSessionPeers.delete(message.clientId);
+      else this.localSessionPeers.set(message.clientId, { id: message.clientId, name: message.username || 'peer', at: message.at || Date.now() });
+      this.updateSessionUI();
+      return;
+    }
+    if (message.type === 'project-update') {
+      if ((message.version || 0) <= this.localProjectVersion) return;
+      this.localProjectVersion = message.version || this.localProjectVersion;
+      this.logText(`local session project update: ${message.reason || 'remote-change'}`);
+      this.applyRemoteProject(message.project);
+    }
+  }
+
+  publishLocalSessionProject(reason = 'local-change') {
+    if (!this.localSessionBus || this.suppressProjectBroadcast) return;
+    this.localProjectVersion += 1;
+    this.localSessionBus.postMessage({
+      type: 'project-update',
+      clientId: this.clientId,
+      username: document.querySelector('#pilotName')?.value || 'pilot',
+      sessionCode: this.defaultSessionCode,
+      version: this.localProjectVersion,
+      reason,
+      project: this.serializeRig(),
+      at: Date.now(),
+    });
   }
 
   bindExampleProjects() {
@@ -282,11 +343,287 @@ class V11PeerDAW {
         this.handleClipAction(clipAction.dataset.clipAction, clipAction.dataset.slotId || '');
         return;
       }
+      const arrangementAction = event.target.closest('[data-arrangement-action]');
+      if (arrangementAction) {
+        this.handleArrangementAction(arrangementAction.dataset.arrangementAction, arrangementAction);
+        return;
+      }
       const moduleAction = event.target.closest('[data-module-action]');
       if (moduleAction) this.handleModuleAction(moduleAction.dataset.moduleAction, moduleAction);
     });
+    workspace?.addEventListener('pointerdown', (event) => this.handleArrangementPointerDown(event));
+    workspace?.addEventListener('pointermove', (event) => this.handleArrangementPointerMove(event));
+    workspace?.addEventListener('pointerdown', (event) => this.handleGridPointerDown(event));
+    workspace?.addEventListener('pointerover', (event) => this.handleGridPointerOver(event));
+    workspace?.addEventListener('pointerup', () => { this.endArrangementDrag(); this.endGridDrag(); });
+    workspace?.addEventListener('pointercancel', () => { this.endArrangementDrag(); this.endGridDrag(); });
+    document.addEventListener('pointerup', () => { this.endArrangementDrag(); this.endGridDrag(); });
+    document.addEventListener('keydown', (event) => this.handleGridShortcut(event));
     workspace?.addEventListener('input', (event) => this.handleWorkspaceInput(event));
     workspace?.addEventListener('change', (event) => this.handleWorkspaceInput(event));
+  }
+
+  gridCellKey(data = {}) {
+    return [data.gridKind, data.moduleId, data.rowId || data.note || data.rowIndex || '', data.stepIndex ?? data.step ?? data.colIndex ?? ''].join(':');
+  }
+
+  gridCellSelected(data = {}) {
+    return this.gridSelection.has(this.gridCellKey(data));
+  }
+
+  cellDataFromElement(el) {
+    return { ...(el?.dataset || {}) };
+  }
+
+  selectGridCell(data, { append = false, selected = true } = {}) {
+    if (!append) this.gridSelection.clear();
+    const key = this.gridCellKey(data);
+    if (selected) this.gridSelection.add(key);
+    else this.gridSelection.delete(key);
+  }
+
+  handleGridPointerDown(event) {
+    const cell = event.target.closest('[data-grid-cell]');
+    if (!cell) return;
+    const data = this.cellDataFromElement(cell);
+    const copy = event.ctrlKey || event.metaKey;
+    const erase = event.altKey;
+    const append = event.shiftKey;
+    this.gridDrag = {
+      moduleId: data.moduleId,
+      kind: data.gridKind,
+      copy,
+      erase,
+      append,
+      source: data,
+      sourceState: this.readGridCellState(data),
+      targetState: erase ? false : copy ? this.readGridCellState(data) : !this.readGridCellState(data),
+      seen: new Set(),
+    };
+    if (append) this.selectGridCell(data, { append: true, selected: !this.gridCellSelected(data) });
+    else this.applyGridDragCell(data);
+    event.preventDefault();
+  }
+
+  handleGridPointerOver(event) {
+    if (!this.gridDrag || event.buttons !== 1) return;
+    const cell = event.target.closest('[data-grid-cell]');
+    if (!cell) return;
+    const data = this.cellDataFromElement(cell);
+    if (data.moduleId !== this.gridDrag.moduleId || data.gridKind !== this.gridDrag.kind) return;
+    this.applyGridDragCell(data);
+  }
+
+  endGridDrag() {
+    if (!this.gridDrag) return;
+    const reason = this.gridDrag.copy ? 'grid-copy-drag' : this.gridDrag.erase ? 'grid-erase-drag' : this.gridDrag.append ? 'grid-select-drag' : 'grid-drag-edit';
+    this.gridDrag = null;
+    this.renderWorkspaceView();
+    this.publishProjectChange(reason);
+  }
+
+  handleGridShortcut(event) {
+    const active = document.activeElement;
+    if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
+    if (!this.gridSelection.size) return;
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === 'd') {
+      event.preventDefault();
+      this.duplicateGridSelection();
+      return;
+    }
+    if (key === 'delete' || key === 'backspace') {
+      event.preventDefault();
+      this.eraseGridSelection();
+      return;
+    }
+    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
+      event.preventDefault();
+      this.editGridSelectionWithKeyboard(event.key, { shift: event.shiftKey, alt: event.altKey, copy: event.ctrlKey || event.metaKey });
+    }
+  }
+
+  noteNameToMidi(note = 'C4') {
+    const match = String(note).trim().match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
+    if (!match) return 60;
+    const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[match[1].toUpperCase()] ?? 0;
+    const accidental = match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0;
+    return (Number(match[3]) + 1) * 12 + base + accidental;
+  }
+
+  midiToNoteName(midi = 60) {
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const value = Math.max(0, Math.min(127, Math.round(Number(midi) || 60)));
+    return `${names[value % 12]}${Math.floor(value / 12) - 1}`;
+  }
+
+  gridDataFromKey(key) {
+    const [gridKind, moduleId, rowOrNote, step] = key.split(':');
+    return { gridKind, moduleId, rowId: rowOrNote, note: rowOrNote, rowIndex: rowOrNote, stepIndex: step, step, colIndex: step };
+  }
+
+  selectedGridData() {
+    return [...this.gridSelection].map((key) => this.gridDataFromKey(key));
+  }
+
+  findPianoNote(module, data) {
+    const stepResolution = module.stepResolutionBeats || 0.25;
+    return module.notes?.find((note) => note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step));
+  }
+
+  eraseGridSelection() {
+    for (const data of this.selectedGridData()) this.writeGridCell(data, false);
+    const count = this.gridSelection.size;
+    this.gridSelection.clear();
+    this.logText(`erased ${count} grid cells`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('grid-erase-selection');
+  }
+
+  editGridSelectionWithKeyboard(key, modifiers = {}) {
+    const selected = this.selectedGridData();
+    const nextSelection = new Set();
+    for (const data of selected) {
+      const module = this.patchBay.modules.get(data.moduleId);
+      if (!module) continue;
+      if (data.gridKind === 'piano') {
+        const stepResolution = module.stepResolutionBeats || 0.25;
+        const note = this.findPianoNote(module, data);
+        if (!note) continue;
+        if (modifiers.shift && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+          const delta = key === 'ArrowRight' ? stepResolution : -stepResolution;
+          note.duration = Math.max(stepResolution, Number((Number(note.duration || stepResolution) + delta).toFixed(6)));
+          nextSelection.add(this.gridCellKey(data));
+          continue;
+        }
+        if (modifiers.shift && (key === 'ArrowUp' || key === 'ArrowDown')) {
+          const delta = key === 'ArrowUp' ? 0.05 : -0.05;
+          note.velocity = Math.max(0, Math.min(1, Number((Number(note.velocity || 0.8) + delta).toFixed(2))));
+          nextSelection.add(this.gridCellKey(data));
+          continue;
+        }
+        const target = { ...data };
+        if (key === 'ArrowRight' || key === 'ArrowLeft') {
+          const deltaSteps = key === 'ArrowRight' ? 1 : -1;
+          if (modifiers.copy) this.writeGridCell({ ...data, step: String(Number(data.step) + deltaSteps) }, true, data);
+          else note.beat = Math.max(0, Number((Number(note.beat || 0) + deltaSteps * stepResolution).toFixed(6)));
+          target.step = String(Math.max(0, Number(data.step) + deltaSteps));
+        }
+        if (key === 'ArrowUp' || key === 'ArrowDown') {
+          const deltaMidi = key === 'ArrowUp' ? 1 : -1;
+          if (modifiers.copy) this.writeGridCell({ ...data, note: this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi) }, true, data);
+          else note.note = this.midiToNoteName(this.noteNameToMidi(note.note) + deltaMidi);
+          target.note = this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi);
+        }
+        nextSelection.add(this.gridCellKey(target));
+      }
+      if (data.gridKind === 'sequencer' && (key === 'ArrowRight' || key === 'ArrowLeft')) {
+        const deltaSteps = key === 'ArrowRight' ? 1 : -1;
+        const target = { ...data, stepIndex: String(Math.max(0, Number(data.stepIndex) + deltaSteps)) };
+        this.writeGridCell(target, true, data);
+        if (!modifiers.copy) this.writeGridCell(data, false);
+        nextSelection.add(this.gridCellKey(target));
+      }
+      if (data.gridKind === 'ocra' && (key === 'ArrowRight' || key === 'ArrowLeft')) {
+        const delta = key === 'ArrowRight' ? 1 : -1;
+        const target = { ...data, colIndex: String(Math.max(0, Number(data.colIndex) + delta)) };
+        this.writeGridCell(target, true, data);
+        if (!modifiers.copy) this.writeGridCell(data, false);
+        nextSelection.add(this.gridCellKey(target));
+      }
+    }
+    this.gridSelection = nextSelection;
+    this.logText(`grid keyboard edit: ${key}${modifiers.shift ? ' shift' : ''}${modifiers.copy ? ' copy' : ''}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('grid-keyboard-edit');
+  }
+
+  readGridCellState(data = {}) {
+    const module = this.patchBay.modules.get(data.moduleId);
+    if (!module) return false;
+    if (data.gridKind === 'piano') {
+      const stepResolution = module.stepResolutionBeats || 0.25;
+      return module.notes?.some((note) => note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step));
+    }
+    if (data.gridKind === 'sequencer') {
+      const row = module.rows?.find((candidate) => candidate.id === data.rowId);
+      return Boolean(row?.steps?.[Number(data.stepIndex)]?.enabled);
+    }
+    if (data.gridKind === 'ocra') return (module.grid?.[Number(data.rowIndex)]?.[Number(data.colIndex)] || '.') !== '.';
+    return false;
+  }
+
+  writeGridCell(data = {}, enabled = true, source = null) {
+    const module = this.patchBay.modules.get(data.moduleId);
+    if (!module) return;
+    if (data.gridKind === 'piano') {
+      const stepResolution = module.stepResolutionBeats || 0.25;
+      const step = Number(data.step);
+      const existing = module.notes?.findIndex((note) => note.note === data.note && Math.round(note.beat / stepResolution) === step);
+      if (!enabled && existing >= 0) module.notes.splice(existing, 1);
+      if (enabled && existing < 0) {
+        const template = source?.gridKind === 'piano'
+          ? module.notes?.find((note) => note.note === source.note && Math.round(note.beat / stepResolution) === Number(source.step))
+          : null;
+        module.notes = module.notes || [];
+        module.notes.push({
+          id: `note-${Date.now()}-${module.notes.length}`,
+          kind: PortType.MIDI,
+          type: 'note-on',
+          beat: step * stepResolution,
+          note: data.note,
+          velocity: template?.velocity ?? 0.8,
+          duration: template?.duration ?? stepResolution * 2,
+        });
+        module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
+      }
+      module.render?.();
+      return;
+    }
+    if (data.gridKind === 'sequencer') {
+      const row = module.rows?.find((candidate) => candidate.id === data.rowId);
+      const stepIndex = Number(data.stepIndex);
+      const templateRow = source?.gridKind === 'sequencer' ? module.rows?.find((candidate) => candidate.id === source.rowId) : null;
+      const template = templateRow?.steps?.[Number(source?.stepIndex)];
+      module.setStep?.(data.rowId, stepIndex, { ...(template || {}), enabled });
+      return;
+    }
+    if (data.gridKind === 'ocra') {
+      const row = Number(data.rowIndex);
+      const col = Number(data.colIndex);
+      if (!module.grid?.[row]) return;
+      const sourceChar = source?.gridKind === 'ocra' ? module.grid?.[Number(source.rowIndex)]?.[Number(source.colIndex)] : null;
+      module.grid[row][col] = enabled ? (sourceChar && sourceChar !== '.' ? sourceChar : 'D') : '.';
+      module.renderGrid?.(null);
+    }
+  }
+
+  applyGridDragCell(data) {
+    if (!this.gridDrag) return;
+    const key = this.gridCellKey(data);
+    if (this.gridDrag.seen.has(key)) return;
+    this.gridDrag.seen.add(key);
+    this.selectGridCell(data, { append: true, selected: true });
+    if (this.gridDrag.append) return;
+    this.writeGridCell(data, this.gridDrag.targetState, this.gridDrag.copy ? this.gridDrag.source : null);
+  }
+
+  duplicateGridSelection() {
+    const parsed = [...this.gridSelection].map((key) => {
+      const [gridKind, moduleId, rowOrNote, step] = key.split(':');
+      return { gridKind, moduleId, rowId: rowOrNote, note: rowOrNote, rowIndex: rowOrNote, stepIndex: step, step, colIndex: step };
+    });
+    for (const data of parsed) {
+      const target = { ...data };
+      if (data.gridKind === 'piano') target.step = String(Number(data.step) + 1);
+      if (data.gridKind === 'sequencer') target.stepIndex = String(Number(data.stepIndex) + 1);
+      if (data.gridKind === 'ocra') target.colIndex = String(Number(data.colIndex) + 1);
+      this.writeGridCell(target, true, data);
+      this.selectGridCell(target, { append: true, selected: true });
+    }
+    this.logText(`duplicated ${parsed.length} grid cells`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('grid-duplicate');
   }
 
   setWorkspaceView(view) {
@@ -464,23 +801,182 @@ class V11PeerDAW {
     this.publishProjectChange('arrangement-cleared');
   }
 
-  noteNames() {
-    return ['C5','B4','A4','G4','F4','E4','D4','C4','B3','A3','G3','F3'];
+  arrangementLengthBeats() {
+    const clipEnd = Math.max(0, ...this.arrangement.clips.map((placement) => placement.startBeat + placement.clip.lengthBeats));
+    return Math.max(16, this.arrangement.loopEndBeat || 0, clipEnd);
+  }
+
+  placementByIndex(index) {
+    return this.arrangement.clips[Number(index)] || null;
+  }
+
+  moveArrangementPlacement(index, delta) {
+    const placement = this.placementByIndex(index);
+    if (!placement) return;
+    placement.startBeat = Math.max(0, Number((placement.startBeat + delta).toFixed(6)));
+    this.logText(`arrangement clip moved: ${placement.clip.name} @ beat ${placement.startBeat}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-move');
+  }
+
+  duplicateArrangementPlacement(index) {
+    const placement = this.placementByIndex(index);
+    if (!placement) return;
+    const duplicate = this.arrangement.placeClip({
+      clip: new Clip({ ...placement.clip.serialize(), id: `${placement.clip.id}-copy-${Date.now()}`, name: `${placement.clip.name} Copy` }),
+      startBeat: placement.startBeat + placement.clip.lengthBeats,
+      trackId: placement.trackId,
+    });
+    this.logText(`arrangement clip duplicated: ${duplicate.clip.name}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-duplicate');
+  }
+
+  deleteArrangementPlacement(index) {
+    const placement = this.placementByIndex(index);
+    if (!placement) return;
+    this.arrangement.clips.splice(Number(index), 1);
+    this.logText(`arrangement clip removed: ${placement.clip.name}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-delete');
+  }
+
+  setArrangementLoop(startBeat, endBeat) {
+    const start = Math.max(0, Number(startBeat));
+    const end = Math.max(start + 1, Number(endBeat));
+    this.arrangement.loopStartBeat = start;
+    this.arrangement.loopEndBeat = end;
+    this.logText(`arrangement loop set: ${start}-${end}`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-loop');
+  }
+
+  previewArrangementBeat(beat) {
+    this.currentBeat = this.arrangement.transportPositionAfter(Math.max(0, Number(beat)), { loop: true });
+    const events = this.arrangement.eventsAt(this.currentBeat);
+    this.logText(`arrangement preview beat ${this.currentBeat}: ${events.length} events`);
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-preview');
+  }
+
+  handleArrangementAction(action, target) {
+    const index = target.dataset.placementIndex;
+    if (action === 'move-left') return this.moveArrangementPlacement(index, -1);
+    if (action === 'move-right') return this.moveArrangementPlacement(index, 1);
+    if (action === 'duplicate') return this.duplicateArrangementPlacement(index);
+    if (action === 'delete') return this.deleteArrangementPlacement(index);
+    if (action === 'preview') return this.previewArrangementBeat(target.dataset.beat ?? this.currentBeat);
+    return null;
+  }
+
+  handleArrangementPointerDown(event) {
+    const clip = event.target.closest('[data-arrangement-clip]');
+    if (!clip || event.target.closest('button')) return;
+    const index = Number(clip.dataset.placementIndex);
+    const placement = this.placementByIndex(index);
+    if (!placement) return;
+    if (event.altKey) {
+      this.deleteArrangementPlacement(index);
+      event.preventDefault();
+      return;
+    }
+    let dragIndex = index;
+    if (event.ctrlKey || event.metaKey) {
+      this.duplicateArrangementPlacement(index);
+      dragIndex = this.arrangement.clips.length - 1;
+    }
+    const track = clip.closest('.timeline-track');
+    const rect = track?.getBoundingClientRect();
+    const dragPlacement = this.arrangement.clips[dragIndex];
+    this.arrangementDrag = {
+      index: dragIndex,
+      mode: event.target.closest('[data-arrangement-resize]')?.dataset.arrangementResize || 'move',
+      startX: event.clientX,
+      startBeat: dragPlacement?.startBeat || 0,
+      startLengthBars: dragPlacement?.clip?.lengthBars || 1,
+      beatsPerBar: dragPlacement?.clip?.beatsPerBar || 4,
+      lengthBeats: this.arrangementLengthBeats(),
+      rectWidth: Math.max(1, rect?.width || 1),
+      snap: event.shiftKey ? 4 : event.altKey ? 0.25 : 1,
+      copied: event.ctrlKey || event.metaKey,
+    };
+    try {
+      if (clip.isConnected && typeof clip.setPointerCapture === 'function') clip.setPointerCapture(event.pointerId);
+    } catch (_) {}
+    event.preventDefault();
+  }
+
+  handleArrangementPointerMove(event) {
+    if (!this.arrangementDrag || event.buttons !== 1) return;
+    const placement = this.placementByIndex(this.arrangementDrag.index);
+    if (!placement) return;
+    const deltaPx = event.clientX - this.arrangementDrag.startX;
+    const rawDeltaBeats = (deltaPx / this.arrangementDrag.rectWidth) * this.arrangementDrag.lengthBeats;
+    const snap = Math.max(0.25, this.arrangementDrag.snap);
+    const quantizedDelta = Number((Math.round(rawDeltaBeats / snap) * snap).toFixed(6));
+    if (this.arrangementDrag.mode === 'resize-end') {
+      const newLengthBeats = Math.max(snap, this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar + quantizedDelta);
+      placement.clip.lengthBars = Math.max(0.25, Number((newLengthBeats / this.arrangementDrag.beatsPerBar).toFixed(6)));
+    } else if (this.arrangementDrag.mode === 'resize-start') {
+      const newStart = Math.max(0, Number((this.arrangementDrag.startBeat + quantizedDelta).toFixed(6)));
+      const oldEnd = this.arrangementDrag.startBeat + this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar;
+      placement.startBeat = Math.min(newStart, Math.max(0, oldEnd - snap));
+      placement.clip.lengthBars = Math.max(0.25, Number(((oldEnd - placement.startBeat) / this.arrangementDrag.beatsPerBar).toFixed(6)));
+    } else {
+      placement.startBeat = Math.max(0, Number((Math.round((this.arrangementDrag.startBeat + rawDeltaBeats) / snap) * snap).toFixed(6)));
+    }
+    const clipEl = document.querySelector(`[data-arrangement-clip][data-placement-index="${this.arrangementDrag.index}"]`);
+    if (clipEl) {
+      clipEl.style.left = `${Math.min(94, (placement.startBeat / this.arrangementDrag.lengthBeats) * 100)}%`;
+      clipEl.style.width = `${Math.max(8, (placement.clip.lengthBeats / this.arrangementDrag.lengthBeats) * 100)}%`;
+    }
+  }
+
+  endArrangementDrag() {
+    if (!this.arrangementDrag) return;
+    const placement = this.placementByIndex(this.arrangementDrag.index);
+    if (placement) this.logText(`arrangement clip ${this.arrangementDrag.mode === 'move' ? (this.arrangementDrag.copied ? 'copied' : 'dragged') : 'resized'}: ${placement.clip.name} @ beat ${placement.startBeat} len ${placement.clip.lengthBeats}`);
+    this.arrangementDrag = null;
+    this.renderWorkspaceView();
+    this.publishProjectChange('arrangement-drag');
+  }
+
+  renderArrangementEditor() {
+    const placements = this.arrangement.clips;
+    const tracks = [...new Set(placements.map((placement) => placement.trackId))];
+    const lanes = tracks.length ? tracks : this.clipCapableModules().slice(0, 4).map((module) => module.id);
+    const length = this.arrangementLengthBeats();
+    const playheadPct = Math.min(98, Math.max(0, (this.currentBeat / length) * 100));
+    const laneMarkup = lanes.map((trackId) => {
+      const module = this.patchBay.modules.get(trackId);
+      const trackClips = placements
+        .map((placement, index) => ({ ...placement, index }))
+        .filter((placement) => placement.trackId === trackId);
+      return `<div class="timeline-lane arrangement-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track"><span class="timeline-playhead" style="left:${playheadPct}%"></span>${trackClips.map((placement) => `<span class="timeline-clip editable" data-arrangement-clip="true" data-placement-index="${placement.index}" style="left:${Math.min(94, (placement.startBeat / length) * 100)}%;width:${Math.max(8, (placement.clip.lengthBeats / length) * 100)}%"><i class="clip-resize-handle left" data-arrangement-resize="resize-start" title="drag to trim start"></i><strong>${this.escapeHtml(placement.clip.name)}</strong><small>@${this.escapeHtml(placement.startBeat)} · ${this.escapeHtml(placement.clip.lengthBeats)}b</small><i class="clip-resize-handle right" data-arrangement-resize="resize-end" title="drag to resize end"></i><span class="clip-actions"><button type="button" data-arrangement-action="move-left" data-placement-index="${placement.index}">◀</button><button type="button" data-arrangement-action="move-right" data-placement-index="${placement.index}">▶</button><button type="button" data-arrangement-action="duplicate" data-placement-index="${placement.index}">DUP</button><button type="button" data-arrangement-action="delete" data-placement-index="${placement.index}">×</button></span></span>`).join('')}</div></div>`;
+    }).join('');
+    return `<div class="workspace-toolbar arrangement-toolbar"><button type="button" data-clip-action="place-all">PLACE ALL CLIPS</button><button type="button" data-clip-action="clear-arrangement">CLEAR</button><label>Loop start <input data-arrangement-input="loop-start" type="number" min="0" step="1" value="${this.escapeHtml(this.arrangement.loopStartBeat)}"></label><label>Loop end <input data-arrangement-input="loop-end" type="number" min="1" step="1" value="${this.escapeHtml(this.arrangement.loopEndBeat)}"></label><label>Preview beat <input data-arrangement-input="preview-beat" type="number" min="0" step="1" value="${this.escapeHtml(this.currentBeat)}"></label><button type="button" data-arrangement-action="preview" data-beat="${this.escapeHtml(this.currentBeat)}">PREVIEW</button><span class="microcopy">${placements.length} placements · loop ${this.arrangement.loopStartBeat}-${this.arrangement.loopEndBeat} · ${this.arrangement.eventsAt(this.currentBeat).length} events now</span></div>${laneMarkup}<p class="microcopy">Arrangement editing is backed by Arrangement.placeClip(), eventsAt(), and transportPositionAfter(). Drag clip body to move, Ctrl/Cmd-drag to copy, drag edges to resize, Shift for 4-beat snap, Alt for fine 1/4-beat snap/delete.</p>`;
+  }
+
+  noteNames(module = null) {
+    const base = ['C5','B4','A4','G4','F4','E4','D4','C4','B3','A3','G3','F3'];
+    const actual = Array.from(new Set((module?.notes || []).map((note) => note.note).filter(Boolean)));
+    return [...actual.filter((note) => !base.includes(note)), ...base];
   }
 
   renderPianoRollEditor(module) {
     const notes = Array.isArray(module.notes) ? module.notes : [];
-    const noteNames = this.noteNames();
+    const noteNames = this.noteNames(module);
     const steps = Math.max(8, Math.min(64, module.steps || Math.ceil((module.lengthBeats || 4) / (module.stepResolutionBeats || 0.25))));
     const cells = noteNames.map((noteName) => `
       <div class="piano-note-label">${this.escapeHtml(noteName)}</div>
       ${Array.from({ length: steps }, (_, step) => {
         const hasNote = notes.some((note) => note.note === noteName && Math.round(note.beat / module.stepResolutionBeats) === step);
-        return `<button type="button" class="piano-cell ${hasNote ? 'on' : ''}" data-module-action="toggle-note" data-module-id="${this.escapeHtml(module.id)}" data-note="${this.escapeHtml(noteName)}" data-step="${step}" title="${this.escapeHtml(noteName)} step ${step + 1}">${hasNote ? '●' : ''}</button>`;
+        const selected = this.gridCellSelected({ gridKind: 'piano', moduleId: module.id, note: noteName, step });
+        return `<button type="button" class="piano-cell ${hasNote ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="piano" data-grid-kind="piano" data-module-action="toggle-note" data-module-id="${this.escapeHtml(module.id)}" data-note="${this.escapeHtml(noteName)}" data-step="${step}" title="${this.escapeHtml(noteName)} step ${step + 1}">${hasNote ? '●' : ''}</button>`;
       }).join('')}
     `).join('');
     const noteRows = notes.map((note) => `<div class="workspace-row"><strong>${this.escapeHtml(note.note)}</strong><span>beat ${this.escapeHtml(note.beat)}</span><label>Velocity <input data-module-input="note-velocity" data-module-id="${this.escapeHtml(module.id)}" data-note-id="${this.escapeHtml(note.id)}" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(note.velocity)}"></label></div>`).join('');
-    return `<div class="piano-roll-editor"><div class="workspace-toolbar"><button type="button" data-module-action="add-note" data-module-id="${this.escapeHtml(module.id)}">ADD NOTE</button><button type="button" data-module-action="clear-notes" data-module-id="${this.escapeHtml(module.id)}">CLEAR NOTES</button><button type="button" data-module-action="apply-swing" data-module-id="${this.escapeHtml(module.id)}">APPLY SWING</button><span class="microcopy">${notes.length} notes · ${steps} steps · full-pane editor</span></div><div class="piano-grid" style="--steps:${steps}">${cells}</div><div class="workspace-list">${noteRows || '<p class="microcopy">No notes yet. Click grid cells or ADD NOTE.</p>'}</div></div>`;
+    return `<div class="piano-roll-editor"><div class="workspace-toolbar"><button type="button" data-module-action="add-note" data-module-id="${this.escapeHtml(module.id)}">ADD NOTE</button><button type="button" data-module-action="clear-notes" data-module-id="${this.escapeHtml(module.id)}">CLEAR NOTES</button><button type="button" data-module-action="apply-swing" data-module-id="${this.escapeHtml(module.id)}">APPLY SWING</button><span class="microcopy">${notes.length} notes · ${steps} steps · click/drag paint · Shift select · Ctrl/Cmd+D duplicate · arrows move · Shift+arrows length/velocity · Delete erase</span></div><div class="piano-grid" style="--steps:${steps}">${cells}</div><div class="workspace-list">${noteRows || '<p class="microcopy">No notes yet. Click grid cells or ADD NOTE.</p>'}</div></div>`;
   }
 
   ensureMixerChannel(module) {
@@ -500,6 +996,156 @@ class V11PeerDAW {
 
   mixerModules() {
     return this.workspaceModules().filter((module) => module.outputs?.some((p) => p.type === PortType.AUDIO) || module.inputs?.some((p) => p.type === PortType.AUDIO) || module === this.mixer);
+  }
+
+  isSamplerModule(module) {
+    return Boolean(
+      module &&
+        (module.kind === 'audio-source' || module.fileName || module.sampleMetadata || module.pads || module.zones) &&
+        (module.setSampleMetadata || module.assignPad || module.sliceCount !== undefined)
+    );
+  }
+
+  ensureWaveformEdit(module) {
+    module.waveformEdit = module.waveformEdit || {
+      trimStartMs: 0,
+      trimEndMs: module.sampleMetadata?.sampleLengthMs || (module.buffer ? Math.round(module.buffer.duration * 1000) : 0),
+      fadeInMs: 0,
+      fadeOutMs: 0,
+      gain: 1,
+      reverse: false,
+      normalized: false,
+    };
+    return module.waveformEdit;
+  }
+
+  renderWaveformEditPanel(module) {
+    const edit = this.ensureWaveformEdit(module);
+    const length = module.sampleMetadata?.sampleLengthMs || (module.buffer ? Math.round(module.buffer.duration * 1000) : 0);
+    return `<article class="workspace-card module-editor-card waveform-edit-panel"><strong>Waveform / buffer edit</strong>${this.renderSamplerWaveformPreview(module)}<label>Trim start ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="trimStartMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.trimStartMs)}"></label><label>Trim end ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="trimEndMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.trimEndMs || length)}"></label><label>Fade in ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="fadeInMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.fadeInMs)}"></label><label>Fade out ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="fadeOutMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.fadeOutMs)}"></label><label>Gain <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="gain" type="range" min="0" max="2" step="0.01" value="${this.escapeHtml(edit.gain)}"></label><div class="button-row"><button type="button" data-module-action="waveform-normalize" data-module-id="${this.escapeHtml(module.id)}">NORMALIZE</button><button type="button" data-module-action="waveform-reverse" data-module-id="${this.escapeHtml(module.id)}">${edit.reverse ? 'UNREVERSE' : 'REVERSE'}</button><button type="button" data-module-action="waveform-apply-take" data-module-id="${this.escapeHtml(module.id)}">APPLY AS TAKE</button></div><p class="microcopy">Non-destructive edit metadata: ${this.escapeHtml(edit.trimStartMs)}-${this.escapeHtml(edit.trimEndMs || length)} ms · gain ${this.escapeHtml(edit.gain)} · ${edit.reverse ? 'reversed' : 'forward'}${edit.normalized ? ' · normalized' : ''}</p></article>`;
+  }
+
+  renderSamplerWaveformPreview(module) {
+    if (typeof module.renderWaveform === 'function') return module.renderWaveform(64);
+    return '<p class="microcopy">No waveform available yet. Load audio in the compact module card to render peaks.</p>';
+  }
+
+  renderCleanSamplerEditor(module) {
+    const metadata = module.sampleMetadata || {};
+    const cues = metadata.cues || [];
+    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Sample</strong><span class="big-number sampler-file-name">${this.escapeHtml(module.fileName || 'no sample')}</span>${this.renderSamplerWaveformPreview(module)}<div class="button-row"><button type="button" data-module-action="sampler-play" data-module-id="${this.escapeHtml(module.id)}">PLAY ${this.escapeHtml(module.rootNote || 'C4')}</button><button type="button" data-module-action="sampler-sync-library" data-module-id="${this.escapeHtml(module.id)}">SYNC LIBRARY</button></div></article>${this.renderWaveformEditPanel(module)}<article class="workspace-card module-editor-card"><strong>Pitch/time</strong><label>Root note <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="rootNote" type="text" value="${this.escapeHtml(module.rootNote || 'C4')}"></label><label>Time shift <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="timeShift" type="number" min="0" step="0.01" value="${this.escapeHtml(module.timeShift ?? 0)}"></label><label>Stretch <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="stretchRatio" type="range" min="0.25" max="4" step="0.01" value="${this.escapeHtml(module.stretchRatio ?? 1)}"></label><label>Pitch semitones <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchSemitones" type="range" min="-48" max="48" step="1" value="${this.escapeHtml(module.pitchSemitones ?? 0)}"></label><label>Pitch cents <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchCents" type="range" min="-100" max="100" step="1" value="${this.escapeHtml(module.pitchCents ?? 0)}"></label></article><article class="workspace-card module-editor-card"><strong>Envelope</strong>${['attack','decay','sustain','release'].map((key) => `<label>${key.toUpperCase()} <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${key}" type="range" min="${key === 'sustain' ? 0 : 0.001}" max="${key === 'sustain' ? 1 : 4}" step="0.001" value="${this.escapeHtml(module[key] ?? 0)}"></label>`).join('')}</article><article class="workspace-card module-editor-card"><strong>Metadata</strong><label>BPM <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="bpm" type="number" min="1" max="400" step="0.01" value="${this.escapeHtml(metadata.bpm || '')}"></label><label>Tags <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="tags" type="text" value="${this.escapeHtml((metadata.tags || []).join(', '))}"></label><label>Creator <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="creator" type="text" value="${this.escapeHtml(metadata.creator || '')}"></label><label>Instrument <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="instrument" type="text" value="${this.escapeHtml(metadata.instrument || '')}"></label><label>Song <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="songTitle" type="text" value="${this.escapeHtml(metadata.songTitle || '')}"></label><div class="button-row"><button type="button" data-module-action="sampler-add-cue" data-module-id="${this.escapeHtml(module.id)}">ADD CUE</button><button type="button" data-module-action="sampler-gen-cues" data-module-id="${this.escapeHtml(module.id)}">GEN 4 CUES</button></div><p class="microcopy">${cues.length} cues · ${this.escapeHtml(metadata.sampleLengthMs || 0)} ms</p></article></div>`;
+  }
+
+  renderDrumSamplerEditor(module) {
+    const pads = [...(module.pads?.values?.() || [])];
+    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Drum pad setup</strong><label>Swing <select data-module-input="drum-swing" data-module-id="${this.escapeHtml(module.id)}">${['swing50','swing54','swing57','swing60','swing62','swing66','swing75','swing90'].map((value) => `<option value="${value}" ${value === module.swing ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Resolution <select data-module-input="drum-resolution" data-module-id="${this.escapeHtml(module.id)}">${['1/4','1/8','1/16'].map((value) => `<option value="${value}" ${value === module.swingResolution ? 'selected' : ''}>${value}</option>`).join('')}</select></label></article><div class="drum-pad-editor-grid">${pads.map((pad) => `<article class="workspace-card module-editor-card drum-pad-editor"><strong>${this.escapeHtml(pad.id)}</strong><label>Name <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="name" type="text" value="${this.escapeHtml(pad.name)}"></label><label>Note <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="note" type="text" value="${this.escapeHtml(pad.note)}"></label><label>Gain <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="gain" type="range" min="0" max="2" step="0.01" value="${this.escapeHtml(pad.gain)}"></label><label>Pan <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="pan" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(pad.pan)}"></label><label>Choke <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="chokeGroup" type="text" value="${this.escapeHtml(pad.chokeGroup || '')}"></label><button type="button" data-module-action="drum-trigger-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-note="${this.escapeHtml(pad.note)}">TRIGGER</button></article>`).join('')}</div></div>`;
+  }
+
+  renderMultiSamplerEditor(module) {
+    const zones = module.zones || [];
+    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Multisampler zones</strong><span class="big-number">${zones.length}</span><label>Slices <input data-module-input="multisampler-slices" data-module-id="${this.escapeHtml(module.id)}" type="number" min="1" max="64" step="1" value="${this.escapeHtml(module.sliceCount || 8)}"></label><div class="button-row"><button type="button" data-module-action="multisampler-add-zone" data-module-id="${this.escapeHtml(module.id)}">ADD EMPTY ZONE</button><button type="button" data-module-action="multisampler-preview-slice" data-module-id="${this.escapeHtml(module.id)}">PREVIEW SLICE</button></div><p class="microcopy">Audio buffers load from compact card; this editor manages persistent zone metadata and slices.</p></article><div class="workspace-list">${zones.map((zone, index) => `<article class="workspace-card module-editor-card"><strong>${this.escapeHtml(zone.name || `zone ${index + 1}`)}</strong><label>Name <input data-module-input="multisampler-zone" data-module-id="${this.escapeHtml(module.id)}" data-zone-index="${index}" data-zone-key="name" type="text" value="${this.escapeHtml(zone.name || '')}"></label><label>Root <input data-module-input="multisampler-zone" data-module-id="${this.escapeHtml(module.id)}" data-zone-index="${index}" data-zone-key="rootNote" type="text" value="${this.escapeHtml(zone.rootNote || 'C4')}"></label><label>Min <input data-module-input="multisampler-zone" data-module-id="${this.escapeHtml(module.id)}" data-zone-index="${index}" data-zone-key="min" type="text" value="${this.escapeHtml(module.noteName?.(zone.min) || 'C1')}"></label><label>Max <input data-module-input="multisampler-zone" data-module-id="${this.escapeHtml(module.id)}" data-zone-index="${index}" data-zone-key="max" type="text" value="${this.escapeHtml(module.noteName?.(zone.max) || 'C7')}"></label></article>`).join('') || '<p class="microcopy">No zones yet. Add empty zone metadata here or load audio files in the compact card.</p>'}</div></div>`;
+  }
+
+  renderSamplerEditor(module) {
+    const inspector = `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Sample editor coverage</strong><p class="microcopy">Full-pane sampler editor started. Waveforms, pads, metadata and zones use existing sampler module APIs.</p></article></div>`;
+    if (module.pads instanceof Map) return inspector + this.renderDrumSamplerEditor(module);
+    if (Array.isArray(module.zones) || module.sliceCount !== undefined) return inspector + this.renderMultiSamplerEditor(module);
+    return inspector + this.renderCleanSamplerEditor(module);
+  }
+
+  isPatternModule(module) {
+    return Boolean(module && (Array.isArray(module.rows) || Array.isArray(module.grid) || typeof module.arpPattern === 'function'));
+  }
+
+  renderSequencerPatternEditor(module) {
+    const rows = module.rows || [];
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>Step sequencer pattern</strong><label>Length <select data-module-input="sequencer-length" data-module-id="${this.escapeHtml(module.id)}">${[4,8,16].map((value) => `<option value="${value}" ${value === module.length ? 'selected' : ''}>${value}</option>`).join('')}</select></label><button type="button" data-module-action="sequencer-convert" data-module-id="${this.escapeHtml(module.id)}">CONVERT TO PIANO ROLL</button><p class="microcopy">${rows.length} rows · ${module.length || 16} steps · editable velocity/micro timing</p></article><div class="pattern-grid">${rows.map((row) => `<div class="pattern-row"><strong>${this.escapeHtml(row.label || row.id)}</strong><span class="pill">${this.escapeHtml(row.note)}</span>${row.steps.map((step, index) => {
+      const selected = this.gridCellSelected({ gridKind: 'sequencer', moduleId: module.id, rowId: row.id, stepIndex: index });
+      return `<button type="button" class="pattern-step ${step.enabled ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="sequencer" data-grid-kind="sequencer" data-module-action="sequencer-toggle-step" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="${index}">${step.enabled ? '◆' : '·'}</button>`;
+    }).join('')}</div>`).join('')}</div><div class="workspace-list">${rows.map((row) => `<article class="workspace-card module-editor-card"><strong>${this.escapeHtml(row.label || row.id)} controls</strong><label>Step 1 velocity <input data-module-input="sequencer-velocity" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(row.steps[0]?.velocity ?? 0.8)}"></label><label>Step 1 micro <input data-module-input="sequencer-micro" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="-0.5" max="0.5" step="0.01" value="${this.escapeHtml(row.steps[0]?.microTiming ?? 0)}"></label></article>`).join('')}</div></div>`;
+  }
+
+  renderOcraPatternEditor(module) {
+    const rows = module.grid || [];
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>OCRA grid editor</strong><div class="button-row"><button type="button" data-module-action="ocra-clear" data-module-id="${this.escapeHtml(module.id)}">CLEAR</button><button type="button" data-module-action="ocra-basic-pulse" data-module-id="${this.escapeHtml(module.id)}">BASIC PULSE</button><button type="button" data-module-action="ocra-step" data-module-id="${this.escapeHtml(module.id)}">RUN FRAME</button></div><p class="microcopy">Edit cells as ORCA text rows. Row mixer controls remain in the compact card.</p></article><div class="ocra-text-grid">${rows.map((row, rowIndex) => `<label>R${String(rowIndex).padStart(2,'0')} <input data-module-input="ocra-row" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" type="text" maxlength="32" value="${this.escapeHtml(row.join ? row.join('') : String(row))}"></label>`).join('')}</div><div class="ocra-cell-grid">${rows.map((row, rowIndex) => `<div class="ocra-cell-row"><strong>R${String(rowIndex).padStart(2,'0')}</strong>${Array.from(row).map((char, colIndex) => { const selected = this.gridCellSelected({ gridKind: 'ocra', moduleId: module.id, rowIndex, colIndex }); return `<button type="button" class="ocra-cell ${char !== '.' ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="ocra" data-grid-kind="ocra" data-module-action="ocra-toggle-cell" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" data-col-index="${colIndex}">${this.escapeHtml(char)}</button>`; }).join('')}</div>`).join('')}</div></div>`;
+  }
+
+  renderArpPatternEditor(module) {
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>ARP pattern editor</strong><label>Notes <input data-module-input="arp-notes" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml((module.notes || []).join(', '))}" placeholder="C3, E3, G3"></label><label>Scale <select data-module-input="arp-param" data-param-key="scale" data-module-id="${this.escapeHtml(module.id)}">${['chromatic','major','minor'].map((value) => `<option value="${value}" ${value === module.scale ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Interval <select data-module-input="arp-param" data-param-key="interval" data-module-id="${this.escapeHtml(module.id)}">${['scale','tritone','fifth','octave'].map((value) => `<option value="${value}" ${value === module.interval ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Direction <select data-module-input="arp-param" data-param-key="direction" data-module-id="${this.escapeHtml(module.id)}">${['up','down'].map((value) => `<option value="${value}" ${value === module.direction ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Octaves <input data-module-input="arp-param" data-param-key="octaves" data-module-id="${this.escapeHtml(module.id)}" type="number" min="1" max="6" value="${this.escapeHtml(module.octaves || 1)}"></label><button type="button" data-module-action="arp-preview" data-module-id="${this.escapeHtml(module.id)}">PREVIEW PATTERN</button></article><article class="workspace-card module-editor-card"><strong>Generated pattern</strong><div class="module-port-grid">${(module.arpPattern?.() || []).map((note) => `<span class="pill">${this.escapeHtml(note)}</span>`).join('') || '<span class="pill">add notes to generate pattern</span>'}</div></article></div>`;
+  }
+
+  renderPatternEditor(module) {
+    const inspector = `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Pattern editor coverage</strong><p class="microcopy">Full-pane OCRA/sequencer/arp editor started. Pattern data uses the module's existing grid/rows/arp APIs.</p></article></div>`;
+    if (Array.isArray(module.grid)) return inspector + this.renderOcraPatternEditor(module);
+    if (typeof module.arpPattern === 'function') return inspector + this.renderArpPatternEditor(module);
+    return inspector + this.renderSequencerPatternEditor(module);
+  }
+
+  renderFieldRecorderEditor(module) {
+    const takes = module.takes || [];
+    return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>Field take manager</strong><span class="big-number">${takes.length}</span><p class="microcopy">Current file: ${this.escapeHtml(module.fileName || 'no sample loaded')}</p><div class="button-row"><button type="button" data-module-action="field-add-take" data-module-id="${this.escapeHtml(module.id)}">ADD TAKE</button><button type="button" data-module-action="field-play" data-module-id="${this.escapeHtml(module.id)}">PLAY</button><button type="button" data-module-action="field-promote-sample" data-module-id="${this.escapeHtml(module.id)}">PROMOTE SAMPLE</button></div></article>${this.renderWaveformEditPanel(module)}<div class="workspace-list">${takes.map((take, index) => `<article class="workspace-card module-editor-card"><strong>${this.escapeHtml(take.name || `take ${index + 1}`)}</strong><label>Name <input data-module-input="field-take" data-module-id="${this.escapeHtml(module.id)}" data-take-index="${index}" data-take-key="name" type="text" value="${this.escapeHtml(take.name || '')}"></label><label>Start ms <input data-module-input="field-take" data-module-id="${this.escapeHtml(module.id)}" data-take-index="${index}" data-take-key="startMs" type="number" min="0" step="1" value="${this.escapeHtml(take.startMs || 0)}"></label><label>End ms <input data-module-input="field-take" data-module-id="${this.escapeHtml(module.id)}" data-take-index="${index}" data-take-key="endMs" type="number" min="0" step="1" value="${this.escapeHtml(take.endMs || 0)}"></label><button type="button" data-module-action="field-delete-take" data-module-id="${this.escapeHtml(module.id)}" data-take-index="${index}">DELETE TAKE</button></article>`).join('') || '<p class="microcopy">No takes yet. Add a take to start trimming/metadata work.</p>'}</div></div>`;
+  }
+
+  renderPeerMonitorEditor(module) {
+    const recentPackets = module.packetLog || [];
+    const routes = this.patchBay.routes.filter((route) => route.from.moduleId === module.id || route.to.moduleId === module.id);
+    return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>Peer / wiring monitor</strong><p class="microcopy">Status: ${this.escapeHtml(module.status || 'offline')} · lobby ${this.escapeHtml(module.lobbyId || 'n/a')}</p><label>Pilot <input data-module-input="peer-pilot" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml(module.lastPilot || 'pilot')}"></label><div class="button-row"><button type="button" data-module-action="peer-connect" data-module-id="${this.escapeHtml(module.id)}">CONNECT</button><button type="button" data-module-action="peer-test-packet" data-module-id="${this.escapeHtml(module.id)}">TEST PACKET</button><button type="button" data-module-action="peer-clear-log" data-module-id="${this.escapeHtml(module.id)}">CLEAR LOG</button></div></article><article class="workspace-card module-editor-card"><strong>Patch routes</strong><div class="route-mini-list">${routes.map((route) => `<span class="pill">${this.escapeHtml(route.from.moduleId)}.${this.escapeHtml(route.from.outputId)} → ${this.escapeHtml(route.to.moduleId)}.${this.escapeHtml(route.to.inputId)}</span>`).join('') || '<span class="pill">no peer routes</span>'}</div></article><article class="workspace-card module-editor-card"><strong>Recent packets</strong><div class="workspace-list">${recentPackets.slice(-8).map((packet) => `<span class="pill">${this.escapeHtml(packet.kind || packet.type || 'packet')} · ${this.escapeHtml(packet.type || packet.note || packet.value || '')}</span>`).join('') || '<span class="pill">no packets yet</span>'}</div></article></div>`;
+  }
+
+  renderModulePorts(module) {
+    const portRows = [...(module.inputs || []).map((port) => ({ ...port, dir: 'in' })), ...(module.outputs || []).map((port) => ({ ...port, dir: 'out' }))];
+    return `<div class="module-port-grid">${portRows.map((port) => `<span class="pill">${this.escapeHtml(port.dir)} · ${this.escapeHtml(port.id)} · ${this.escapeHtml(port.type)}</span>`).join('') || '<span class="pill">no ports</span>'}</div>`;
+  }
+
+  renderClockEditor(module) {
+    return `<div class="workspace-card module-editor-card"><strong>Transport controls</strong><label>BPM <input data-module-input="clock-bpm" data-module-id="${this.escapeHtml(module.id)}" type="number" min="40" max="260" step="1" value="${this.escapeHtml(module.bpm || 120)}"></label><p class="microcopy">Updates the focused clock module. Full tap-tempo/groove controls are tracked in MODULE_UI_BACKLOG.</p></div>`;
+  }
+
+  synthRange(module, key, { min = 0, max = 1, step = 0.01, label = key, value = module[key] } = {}) {
+    return `<label>${this.escapeHtml(label)} <input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="range" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}"></label>`;
+  }
+
+  synthNumber(module, key, { min = 0, max = 16, step = 0.01, label = key, value = module[key] } = {}) {
+    return `<label>${this.escapeHtml(label)} <input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="number" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}"></label>`;
+  }
+
+  renderAdsrPanel(module) {
+    const keys = ['attack', 'decay', 'sustain', 'release'].filter((key) => key in module);
+    if (!keys.length) return '';
+    return `<section class="synth-panel"><strong>Envelope</strong>${keys.map((key) => this.synthRange(module, key, { min: key === 'sustain' ? 0 : 0.001, max: key === 'sustain' ? 1 : 4, step: 0.001, label: key.toUpperCase() })).join('')}</section>`;
+  }
+
+  renderSynthEditor(module) {
+    const waveforms = ['sine', 'triangle', 'sawtooth', 'square'];
+    const waveform = module.waveform || module.oscillatorType || 'triangle';
+    const hasOscMix = module.oscillatorMix && typeof module.oscillatorMix === 'object';
+    const oscillatorPanel = `<section class="synth-panel"><strong>Oscillator</strong>${'waveform' in module || 'oscillatorType' in module ? `<label>Waveform <select data-module-input="synth-param" data-param-key="waveform" data-module-id="${this.escapeHtml(module.id)}">${waveforms.map((w) => `<option value="${w}" ${w === waveform ? 'selected' : ''}>${w}</option>`).join('')}</select></label>` : ''}${hasOscMix ? Object.entries(module.oscillatorMix).map(([key, value]) => this.synthRange(module, `oscillatorMix.${key}`, { min: 0, max: 1.5, step: 0.01, label: `${key} mix`, value })).join('') : ''}${'detuneCents' in module ? this.synthRange(module, 'detuneCents', { min: 0, max: 48, step: 0.1, label: 'Detune cents' }) : ''}</section>`;
+    const filterPanel = ['cutoff', 'resonance', 'filterEnvelopeAmount', 'driveAmount'].some((key) => key in module)
+      ? `<section class="synth-panel"><strong>Filter / Drive</strong>${'cutoff' in module ? this.synthRange(module, 'cutoff', { min: 80, max: 12000, step: 1, label: 'Cutoff' }) : ''}${'resonance' in module ? this.synthRange(module, 'resonance', { min: 0.1, max: 24, step: 0.1, label: 'Resonance' }) : ''}${'filterEnvelopeAmount' in module ? this.synthRange(module, 'filterEnvelopeAmount', { min: 0, max: 6000, step: 1, label: 'Filter env' }) : ''}${'driveAmount' in module ? this.synthRange(module, 'driveAmount', { min: 0, max: 1.5, step: 0.01, label: 'Drive' }) : ''}</section>`
+      : '';
+    const fmPanel = ['carrierRatio', 'modulatorRatio', 'modulationIndex', 'feedback'].some((key) => key in module)
+      ? `<section class="synth-panel"><strong>FM operator</strong>${'carrierRatio' in module ? this.synthNumber(module, 'carrierRatio', { min: 0.125, max: 16, step: 0.01, label: 'Carrier ratio' }) : ''}${'modulatorRatio' in module ? this.synthNumber(module, 'modulatorRatio', { min: 0.125, max: 16, step: 0.01, label: 'Mod ratio' }) : ''}${'modulationIndex' in module ? this.synthRange(module, 'modulationIndex', { min: 0, max: 24, step: 0.01, label: 'Index' }) : ''}${'feedback' in module ? this.synthRange(module, 'feedback', { min: 0, max: 1, step: 0.01, label: 'Feedback' }) : ''}</section>`
+      : '';
+    const wavetablePanel = 'wavetable' in module
+      ? `<section class="synth-panel"><strong>Wavetable</strong><label>Table <select data-module-input="synth-param" data-param-key="wavetable" data-module-id="${this.escapeHtml(module.id)}">${['classic', 'bright', 'hollow', 'glass'].map((name) => `<option value="${name}" ${name === module.wavetable ? 'selected' : ''}>${name}</option>`).join('')}</select></label>${'morph' in module ? this.synthRange(module, 'morph', { min: 0, max: 1, step: 0.01, label: 'Morph' }) : ''}${'tableSize' in module ? this.synthNumber(module, 'tableSize', { min: 8, max: 128, step: 1, label: 'Table size' }) : ''}</section>`
+      : '';
+    return `<div class="workspace-card module-editor-card synth-editor-card"><strong>Full synth control panel</strong><div class="synth-panel-grid">${oscillatorPanel}${filterPanel}${fmPanel}${wavetablePanel}${this.renderAdsrPanel(module)}</div><div class="button-row"><button type="button" data-module-action="audition-note" data-module-id="${this.escapeHtml(module.id)}">AUDITION C4</button><button type="button" data-module-action="audition-chord" data-module-id="${this.escapeHtml(module.id)}">AUDITION CHORD</button></div><p class="microcopy">Model-backed controls for oscillator, filter, envelope, FM and wavetable parameters where supported by this module.</p></div>`;
+  }
+
+  renderEffectEditor(module) {
+    const params = Array.isArray(module.params) ? module.params : [];
+    return `<div class="workspace-card module-editor-card"><strong>Effect parameters</strong>${params.map((param) => `<label>${this.escapeHtml(param.label || param.key)} <input data-module-input="effect-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(param.key)}" type="range" min="${this.escapeHtml(param.min)}" max="${this.escapeHtml(param.max)}" step="${this.escapeHtml(param.step || 0.01)}" value="${this.escapeHtml(module[param.key])}"></label>`).join('') || '<p class="microcopy">This module does not expose parameter specs yet.</p>'}<p class="microcopy">Uses the module parameter spec and setParam() when available.</p></div>`;
+  }
+
+  renderGenericModuleEditor(module) {
+    const incoming = this.patchBay.routes.filter((r) => r.to.moduleId === module.id);
+    const outgoing = this.patchBay.routes.filter((r) => r.from.moduleId === module.id);
+    const special = [
+      module.kind === 'clock' ? this.renderClockEditor(module) : '',
+      module.kind?.includes('effect') || Array.isArray(module.params) ? this.renderEffectEditor(module) : '',
+      module.outputs?.some((p) => p.type === PortType.AUDIO) && (('waveform' in module) || ('cutoff' in module) || typeof module.noteOn === 'function') ? this.renderSynthEditor(module) : '',
+    ].filter(Boolean).join('');
+    return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Patch summary</strong><p class="microcopy">Incoming: ${incoming.length} · Outgoing: ${outgoing.length}</p><div class="workspace-list route-mini-list">${[...incoming.map((r) => `← ${r.from.moduleId}.${r.from.outputId}`), ...outgoing.map((r) => `→ ${r.to.moduleId}.${r.to.inputId}`)].map((label) => `<span class="pill">${this.escapeHtml(label)}</span>`).join('') || '<span class="pill">unpatched</span>'}</div></article>${special || '<article class="workspace-card module-editor-card"><strong>Focused editor pending</strong><p class="microcopy">This module currently has the universal inspector. Add a domain editor from docs/MODULE_UI_BACKLOG.md.</p></article>'}</div>`;
   }
 
   renderMixerEditor() {
@@ -523,7 +1169,40 @@ class V11PeerDAW {
     module.apply?.();
   }
 
+  setSynthParam(module, key, rawValue) {
+    if (!module || !key) return;
+    const value = ['waveform', 'oscillatorType', 'wavetable', 'modulationMode'].includes(key) ? rawValue : Number(rawValue);
+    if (key.startsWith('oscillatorMix.')) {
+      const mixKey = key.split('.')[1];
+      module.oscillatorMix = { ...(module.oscillatorMix || {}), [mixKey]: Number(rawValue) };
+      return;
+    }
+    if (key === 'waveform') {
+      if ('waveform' in module) module.waveform = rawValue;
+      if ('oscillatorType' in module) module.oscillatorType = rawValue;
+      return;
+    }
+    module.setParam?.(key, rawValue);
+    if (key in module) module[key] = value;
+    if (key === 'cutoff' && module.filter && module.ctx) module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
+    if (key === 'resonance' && module.filter?.Q && module.ctx) module.filter.Q.setTargetAtTime(module.resonance, module.ctx.currentTime, 0.02);
+    if (key === 'driveAmount' && module.drive && 'curve' in module.drive && typeof module.setParam === 'function') module.setParam('driveAmount', module.driveAmount);
+  }
+
   handleWorkspaceInput(event) {
+    const arrangementInput = event.target.closest('[data-arrangement-input]');
+    if (arrangementInput) {
+      const kind = arrangementInput.dataset.arrangementInput;
+      if (kind === 'loop-start' || kind === 'loop-end') {
+        const root = document.querySelector('#workspaceMainView');
+        this.setArrangementLoop(
+          root?.querySelector('[data-arrangement-input="loop-start"]')?.value ?? this.arrangement.loopStartBeat,
+          root?.querySelector('[data-arrangement-input="loop-end"]')?.value ?? this.arrangement.loopEndBeat
+        );
+      }
+      if (kind === 'preview-beat') this.previewArrangementBeat(arrangementInput.value);
+      return;
+    }
     const input = event.target.closest('[data-module-input]');
     if (!input) return;
     const type = input.dataset.moduleInput;
@@ -551,6 +1230,154 @@ class V11PeerDAW {
       note.velocity = Number(input.value);
       module.render?.();
       this.publishProjectChange('piano-note-velocity');
+      return;
+    }
+    const module = this.patchBay.modules.get(moduleId);
+    if (!module) return;
+    if (type === 'clock-bpm') {
+      module.bpm = Math.max(40, Math.min(260, Number(input.value) || module.bpm || 120));
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('clock-bpm');
+      return;
+    }
+    if (type === 'synth-waveform') {
+      if ('waveform' in module) module.waveform = input.value;
+      if ('oscillatorType' in module) module.oscillatorType = input.value;
+      module.render?.();
+      this.publishProjectChange('synth-waveform');
+      return;
+    }
+    if (type === 'synth-cutoff') {
+      module.cutoff = Number(input.value) || module.cutoff;
+      if (module.filter && module.ctx) module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
+      module.render?.();
+      this.publishProjectChange('synth-cutoff');
+      return;
+    }
+    if (type === 'synth-release') {
+      module.release = Number(input.value) || module.release;
+      module.render?.();
+      this.publishProjectChange('synth-release');
+      return;
+    }
+    if (type === 'synth-param') {
+      this.setSynthParam(module, input.dataset.paramKey, input.value);
+      this.publishProjectChange('synth-param');
+      return;
+    }
+    if (type === 'effect-param') {
+      module.setParam?.(input.dataset.paramKey, input.value);
+      this.renderWorkspaceView();
+      this.publishProjectChange('effect-param');
+      return;
+    }
+    if (type === 'sampler-param') {
+      module.setParam?.(input.dataset.paramKey, input.value);
+      this.renderWorkspaceView();
+      this.publishProjectChange('sampler-param');
+      return;
+    }
+    if (type === 'sampler-meta') {
+      const key = input.dataset.metaKey;
+      const value = key === 'tags' ? input.value.split(',').map((item) => item.trim()).filter(Boolean) : input.value;
+      module.setSampleMetadata?.({ [key]: value });
+      this.renderWorkspaceView();
+      this.publishProjectChange('sampler-meta');
+      return;
+    }
+    if (type === 'drum-swing') {
+      module.swing = input.value;
+      module.render?.();
+      this.publishProjectChange('drum-swing');
+      return;
+    }
+    if (type === 'drum-resolution') {
+      module.swingResolution = input.value;
+      module.render?.();
+      this.publishProjectChange('drum-resolution');
+      return;
+    }
+    if (type === 'drum-pad') {
+      const current = module.pads?.get(input.dataset.padId) || {};
+      const raw = input.value;
+      const value = ['gain', 'pan'].includes(input.dataset.padKey) ? Number(raw) : raw;
+      module.assignPad?.(input.dataset.padId, { ...current, [input.dataset.padKey]: value });
+      this.renderWorkspaceView();
+      this.publishProjectChange('drum-pad');
+      return;
+    }
+    if (type === 'multisampler-slices') {
+      module.sliceCount = Math.max(1, Math.min(64, Number(input.value) || module.sliceCount || 8));
+      module.render?.();
+      this.publishProjectChange('multisampler-slices');
+      return;
+    }
+    if (type === 'multisampler-zone') {
+      const zone = module.zones?.[Number(input.dataset.zoneIndex)];
+      if (!zone) return;
+      const key = input.dataset.zoneKey;
+      if (key === 'min' || key === 'max') zone[key] = module.midi?.(input.value) ?? zone[key];
+      else zone[key] = input.value;
+      module.render?.();
+      this.publishProjectChange('multisampler-zone');
+      return;
+    }
+    if (type === 'sequencer-length') {
+      module.setLength?.(input.value);
+      this.renderWorkspaceView();
+      this.publishProjectChange('sequencer-length');
+      return;
+    }
+    if (type === 'sequencer-velocity' || type === 'sequencer-micro') {
+      const patch = type === 'sequencer-velocity' ? { velocity: input.value } : { microTiming: input.value };
+      module.setStep?.(input.dataset.rowId, Number(input.dataset.stepIndex), patch);
+      this.renderWorkspaceView();
+      this.publishProjectChange(type);
+      return;
+    }
+    if (type === 'ocra-row') {
+      const rowIndex = Number(input.dataset.rowIndex);
+      const value = String(input.value || '').padEnd(32, '.').slice(0, 32);
+      if (module.grid?.[rowIndex]) module.grid[rowIndex] = value.split('');
+      module.renderGrid?.(null);
+      this.publishProjectChange('ocra-row');
+      return;
+    }
+    if (type === 'arp-notes') {
+      module.notes = input.value.split(',').map((note) => note.trim()).filter(Boolean);
+      module.velocities = new Map(module.notes.map((note) => [note, 0.7]));
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('arp-notes');
+      return;
+    }
+    if (type === 'arp-param') {
+      module.setParam?.(input.dataset.paramKey, input.value);
+      this.renderWorkspaceView();
+      this.publishProjectChange('arp-param');
+      return;
+    }
+    if (type === 'field-take') {
+      module.takes = module.takes || [];
+      const take = module.takes[Number(input.dataset.takeIndex)];
+      if (!take) return;
+      const key = input.dataset.takeKey;
+      take[key] = ['startMs','endMs'].includes(key) ? Number(input.value) || 0 : input.value;
+      this.publishProjectChange('field-take');
+      return;
+    }
+    if (type === 'peer-pilot') {
+      module.lastPilot = input.value || 'pilot';
+      this.publishProjectChange('peer-pilot');
+      return;
+    }
+    if (type === 'waveform-edit') {
+      const edit = this.ensureWaveformEdit(module);
+      const key = input.dataset.waveformKey;
+      edit[key] = key === 'gain' ? Number(input.value) : Math.max(0, Number(input.value) || 0);
+      if (edit.trimEndMs && edit.trimStartMs > edit.trimEndMs) edit.trimStartMs = edit.trimEndMs;
+      this.publishProjectChange('waveform-edit');
     }
   }
 
@@ -604,6 +1431,180 @@ class V11PeerDAW {
       module.applySwingToClip?.({ amount: 'swing60', resolution: '1/8' });
       this.renderWorkspaceView();
       this.publishProjectChange('piano-swing-applied');
+      return;
+    }
+    if (action === 'audition-note') {
+      module.noteOn?.('C4', 0.7);
+      setTimeout(() => module.noteOff?.('C4'), 250);
+      this.logText(`audition: ${module.title}`);
+      return;
+    }
+    if (action === 'audition-chord') {
+      ['C4', 'E4', 'G4'].forEach((note) => module.noteOn?.(note, 0.55));
+      setTimeout(() => ['C4', 'E4', 'G4'].forEach((note) => module.noteOff?.(note)), 350);
+      this.logText(`audition chord: ${module.title}`);
+      return;
+    }
+    if (action === 'sampler-play') {
+      module.play?.(module.rootNote || 'C4', 0.9);
+      this.logText(`sampler play: ${module.title}`);
+      return;
+    }
+    if (action === 'sampler-sync-library') {
+      const detail = module.syncMetadataToLibrary?.();
+      if (detail) this.syncModuleMetadataToSampleLibrary(detail);
+      this.publishProjectChange('sampler-sync-library');
+      return;
+    }
+    if (action === 'sampler-add-cue') {
+      module.addCue?.({ startMs: 0, bpm: module.sampleMetadata?.bpm || 120, name: `cue ${(module.sampleMetadata?.cues?.length || 0) + 1}` });
+      this.renderWorkspaceView();
+      this.publishProjectChange('sampler-add-cue');
+      return;
+    }
+    if (action === 'sampler-gen-cues') {
+      module.generateInBeatCues?.({ startMs: 0, bpm: module.sampleMetadata?.bpm || 120, beats: 4 });
+      this.renderWorkspaceView();
+      this.publishProjectChange('sampler-gen-cues');
+      return;
+    }
+    if (action === 'drum-trigger-pad') {
+      module.trigger?.(target.dataset.padNote, 0.85);
+      this.logText(`drum pad trigger: ${module.title} ${target.dataset.padNote}`);
+      return;
+    }
+    if (action === 'multisampler-add-zone') {
+      module.zones = module.zones || [];
+      module.zones.push({ name: `zone ${module.zones.length + 1}`, rootNote: 'C4', min: module.midi?.('C1') ?? 24, max: module.midi?.('C7') ?? 96, buffer: null });
+      module.render?.();
+      this.renderWorkspaceView();
+      this.publishProjectChange('multisampler-add-zone');
+      return;
+    }
+    if (action === 'multisampler-preview-slice') {
+      module.play?.('C4', 0.8, undefined, 0);
+      this.logText(`multisampler preview slice: ${module.title}`);
+      return;
+    }
+    if (action === 'sequencer-toggle-step') {
+      const data = this.cellDataFromElement(target);
+      this.selectGridCell(data, { append: target.shiftKey, selected: true });
+      this.writeGridCell(data, !this.readGridCellState(data));
+      this.renderWorkspaceView();
+      this.publishProjectChange('sequencer-toggle-step');
+      return;
+    }
+    if (action === 'sequencer-convert') {
+      module.emitConversion?.();
+      this.convertModuleToPianoRoll?.(module.id);
+      this.logText(`sequencer converted: ${module.title}`);
+      this.renderWorkspaceView();
+      this.publishProjectChange('sequencer-convert');
+      return;
+    }
+    if (action === 'ocra-clear') {
+      module.grid = Array.from({ length: module.grid?.length || 14 }, () => new Array(32).fill('.'));
+      module.renderGrid?.(null);
+      this.renderWorkspaceView();
+      this.publishProjectChange('ocra-clear');
+      return;
+    }
+    if (action === 'ocra-basic-pulse') {
+      module.initGrid?.();
+      module.renderGrid?.(null);
+      this.renderWorkspaceView();
+      this.publishProjectChange('ocra-basic-pulse');
+      return;
+    }
+    if (action === 'ocra-step') {
+      const result = module.runOrca?.();
+      module.renderGrid?.(result?.act || null);
+      this.logText(`ocra frame: ${module.title}`);
+      this.publishProjectChange('ocra-step');
+      return;
+    }
+    if (action === 'ocra-toggle-cell') {
+      const data = this.cellDataFromElement(target);
+      this.selectGridCell(data, { append: target.shiftKey, selected: true });
+      this.writeGridCell(data, !this.readGridCellState(data));
+      this.renderWorkspaceView();
+      this.publishProjectChange('ocra-toggle-cell');
+      return;
+    }
+    if (action === 'arp-preview') {
+      this.logText(`arp pattern: ${(module.arpPattern?.() || []).join(' ') || 'empty'}`);
+      return;
+    }
+    if (action === 'field-add-take') {
+      module.takes = module.takes || [];
+      module.takes.push({ name: `take ${module.takes.length + 1}`, startMs: 0, endMs: module.buffer ? Math.round(module.buffer.duration * 1000) : 0, fileName: module.fileName || 'no sample loaded' });
+      this.renderWorkspaceView();
+      this.publishProjectChange('field-add-take');
+      return;
+    }
+    if (action === 'field-delete-take') {
+      module.takes?.splice(Number(target.dataset.takeIndex), 1);
+      this.renderWorkspaceView();
+      this.publishProjectChange('field-delete-take');
+      return;
+    }
+    if (action === 'field-play') {
+      module.play?.();
+      this.logText(`field play: ${module.title}`);
+      return;
+    }
+    if (action === 'field-promote-sample') {
+      this.sampleLibrary.addSample('/field-recorder', { filename: module.fileName || 'field take', sampleRef: `${module.id}/take`, tags: ['field-recorder'] });
+      this.sampleLibrary.save();
+      this.renderSamplePanels();
+      this.logText(`field sample promoted: ${module.fileName || module.title}`);
+      this.publishProjectChange('field-promote-sample');
+      return;
+    }
+    if (action === 'peer-connect') {
+      module.lastPilot = document.querySelector(`[data-module-input="peer-pilot"][data-module-id="${module.id}"]`)?.value || module.lastPilot || 'pilot';
+      module.connect?.(module.lastPilot).catch?.((error) => this.logText(`peer connect failed: ${error.message}`));
+      this.logText(`peer connect requested: ${module.lastPilot}`);
+      return;
+    }
+    if (action === 'peer-test-packet') {
+      module.packetLog = module.packetLog || [];
+      const packet = { kind: PortType.CONTROL, type: 'test', value: 'ping' };
+      module.packetLog.push(packet);
+      module.emitPacket?.(packet, 'control');
+      this.logText(`peer test packet: ${module.title}`);
+      this.renderWorkspaceView();
+      return;
+    }
+    if (action === 'peer-clear-log') {
+      module.packetLog = [];
+      this.renderWorkspaceView();
+      return;
+    }
+    if (action === 'waveform-normalize') {
+      const edit = this.ensureWaveformEdit(module);
+      edit.normalized = true;
+      edit.gain = Math.max(edit.gain || 1, 1);
+      this.logText(`waveform normalized: ${module.title}`);
+      this.renderWorkspaceView();
+      this.publishProjectChange('waveform-normalize');
+      return;
+    }
+    if (action === 'waveform-reverse') {
+      const edit = this.ensureWaveformEdit(module);
+      edit.reverse = !edit.reverse;
+      this.logText(`waveform ${edit.reverse ? 'reversed' : 'forward'}: ${module.title}`);
+      this.renderWorkspaceView();
+      this.publishProjectChange('waveform-reverse');
+      return;
+    }
+    if (action === 'waveform-apply-take') {
+      const edit = this.ensureWaveformEdit(module);
+      module.takes = module.takes || [];
+      module.takes.push({ name: `edit ${module.takes.length + 1}`, startMs: edit.trimStartMs, endMs: edit.trimEndMs, gain: edit.gain, reverse: edit.reverse, normalized: edit.normalized, fileName: module.fileName || 'sample' });
+      this.logText(`waveform edit applied as take: ${module.title}`);
+      this.renderWorkspaceView();
+      this.publishProjectChange('waveform-apply-take');
     }
   }
 
@@ -630,7 +1631,8 @@ class V11PeerDAW {
     const audioRoutes = this.routingGraph.edges.filter((edge) => edge.type === 'audio').length;
     const view = this.workspaceView || 'session';
     if (view === 'session') {
-      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${activeSession?.participants?.length || 1}</span><p class="microcopy">Local pilot plus connected peers are listed in Session Info.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'}</p></article></div>`;
+      const participantCount = (activeSession?.participants?.length || 1) + this.localSessionPeers.size + this.peerList.length;
+      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
       return;
     }
     if (view === 'clips') {
@@ -644,14 +1646,7 @@ class V11PeerDAW {
       return;
     }
     if (view === 'arrangement') {
-      const placements = this.arrangement.clips;
-      const tracks = [...new Set(placements.map((placement) => placement.trackId))];
-      const lanes = tracks.length ? tracks : this.clipCapableModules().slice(0, 4).map((module) => module.id);
-      root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="place-all">PLACE ALL CLIPS</button><button type="button" data-clip-action="clear-arrangement">CLEAR</button><span class="microcopy">${placements.length} placements · loop ${this.arrangement.loopStartBeat}-${this.arrangement.loopEndBeat} beats</span></div>${lanes.map((trackId) => {
-        const module = this.patchBay.modules.get(trackId);
-        const trackClips = placements.filter((placement) => placement.trackId === trackId);
-        return `<div class="timeline-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track">${trackClips.map((placement) => `<span class="timeline-clip" style="left:${Math.min(92, placement.startBeat * 4)}%;width:${Math.max(10, placement.clip.lengthBeats * 4)}%">${this.escapeHtml(placement.clip.name)}</span>`).join('')}</div></div>`;
-      }).join('')}<p class="microcopy">Arrangement is now real state from Arrangement.placeClip() and is exported with the project.</p>`;
+      root.innerHTML = this.renderArrangementEditor();
       return;
     }
     if (view === 'mixer') {
@@ -663,9 +1658,17 @@ class V11PeerDAW {
       root.innerHTML = '<p class="microcopy">No module selected.</p>';
       return;
     }
-    const detail = focused.kind === 'midi-generator'
-      ? this.renderPianoRollEditor(focused)
-      : `<div class="module-focus"><article class="workspace-card"><strong>${this.escapeHtml(focused.title)}</strong><p class="microcopy">${this.escapeHtml(focused.kind)} · ${focused.inputs?.length || 0} inputs · ${focused.outputs?.length || 0} outputs</p></article><article class="workspace-card"><strong>Patch summary</strong><p class="microcopy">Incoming: ${this.patchBay.routes.filter((r) => r.to.moduleId === focused.id).length} · Outgoing: ${this.patchBay.routes.filter((r) => r.from.moduleId === focused.id).length}</p></article></div>`;
+    const detail = this.isPatternModule(focused)
+      ? this.renderPatternEditor(focused)
+      : focused.kind === 'midi-generator' && Array.isArray(focused.notes)
+        ? this.renderPianoRollEditor(focused)
+        : this.isSamplerModule(focused)
+          ? this.renderSamplerEditor(focused)
+          : focused.id?.includes('field') || focused.title?.toLowerCase?.().includes('field recorder')
+            ? this.renderFieldRecorderEditor(focused)
+            : focused.kind === 'network' || focused.id?.includes('peer') || focused.id?.includes('wiring')
+              ? this.renderPeerMonitorEditor(focused)
+              : this.renderGenericModuleEditor(focused);
     root.innerHTML = detail;
   }
 
@@ -684,7 +1687,12 @@ class V11PeerDAW {
       username: p.name || p.username || 'peer',
       role: 'peer',
     }));
-    const rows = [...participants, ...remotePeers];
+    const localBusPeers = [...this.localSessionPeers.values()].map((p) => ({
+      id: p.id,
+      username: p.name || 'peer',
+      role: 'local-session',
+    }));
+    const rows = [...participants, ...remotePeers, ...localBusPeers];
     if (listEl) {
       listEl.innerHTML = rows.length
         ? rows
@@ -1309,6 +2317,7 @@ class V11PeerDAW {
   publishProjectChange(reason = 'local-change') {
     if (this.suppressProjectBroadcast) return;
     this.subLobby.publishProjectChange(this.serializeRig(), reason);
+    this.publishLocalSessionProject(reason);
   }
 
   async rebuildRigFromProject(project) {

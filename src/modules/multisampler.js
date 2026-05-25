@@ -122,6 +122,14 @@ export class MultiSamplerModule extends ModuleBase {
   hydrate(data = {}) {
     this.sliceCount = data.sliceCount || this.sliceCount;
     this.fileName = data.fileName || this.fileName;
+    this.zones = (data.zones || []).map((zone) => ({
+      name: zone.name || 'sample zone',
+      rootNote: zone.rootNote || 'C4',
+      min: this.midi(zone.minNote || 'C1'),
+      max: this.midi(zone.maxNote || 'C7'),
+      buffer: null,
+    }));
+    this.samples.clear();
   }
 
   connectAudio(dest) {
