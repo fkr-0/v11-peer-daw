@@ -1,5 +1,6 @@
 // PeerModGroove/src/modules/channel-strip.js
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 const FILTER_TYPES = new Set([
   'lowpass',
@@ -182,7 +183,10 @@ export class ChannelStripModule extends ModuleBase {
   }
 
   serialize() {
-    return this.exportPreset();
+    return {
+      ...super.serialize(),
+      ...this.exportPreset(),
+    };
   }
 
   hydrate(data = {}) {
@@ -211,7 +215,7 @@ export class ChannelStripModule extends ModuleBase {
 
   render() {
     if (!this.root) return;
-    this.root.innerHTML = `<div class="module-head"><span>▥</span><strong>${this.title}</strong><small>CHANNEL STRIP</small></div><label>Gain <input class="mini-input" type="range" min="0" max="1.5" step="0.01" value="${this.gainValue}" data-gain></label><label>Pan <input class="mini-input" type="range" min="-1" max="1" step="0.01" value="${this.panValue}" data-pan></label><button class="mini-button" data-mute>${this.muted ? 'UNMUTE' : 'MUTE'}</button><div class="effect-rack"><button class="mini-button" data-add-filter>ADD FILTER</button><button class="mini-button" data-export-preset>EXPORT PRESET</button><textarea class="mini-input" data-preset-json rows="4" placeholder="paste channel strip preset JSON"></textarea><button class="mini-button" data-import-preset>IMPORT PRESET</button>${this.renderFilterRows()}</div>`;
+    this.root.innerHTML = `<div class="module-head"><span>▥</span><strong>${escapeHtml(this.title)}</strong><small>CHANNEL STRIP</small></div><label>Gain <input class="mini-input" type="range" min="0" max="1.5" step="0.01" value="${this.gainValue}" data-gain></label><label>Pan <input class="mini-input" type="range" min="-1" max="1" step="0.01" value="${this.panValue}" data-pan></label><button class="mini-button" data-mute>${this.muted ? 'UNMUTE' : 'MUTE'}</button><div class="effect-rack"><button class="mini-button" data-add-filter>ADD FILTER</button><button class="mini-button" data-export-preset>EXPORT PRESET</button><textarea class="mini-input" data-preset-json rows="4" placeholder="paste channel strip preset JSON"></textarea><button class="mini-button" data-import-preset>IMPORT PRESET</button>${this.renderFilterRows()}</div>`;
     this.root.querySelector('[data-gain]').oninput = (e) => {
       this.gainValue = clamp(e.target.value, 0, 1.5);
       this.apply();
@@ -289,7 +293,7 @@ export class MixerDeskModule extends ModuleBase {
   }
   render() {
     if (!this.root) return;
-    this.root.innerHTML = `<div class="module-head"><span>▧</span><strong>${this.title}</strong><small>MASTER MIX</small></div><label>Master <input class="mini-input" type="range" min="0" max="1.5" step="0.01" value="${this.master}" data-master></label>`;
+    this.root.innerHTML = `<div class="module-head"><span>▧</span><strong>${escapeHtml(this.title)}</strong><small>MASTER MIX</small></div><label>Master <input class="mini-input" type="range" min="0" max="1.5" step="0.01" value="${this.master}" data-master></label>`;
     this.root.querySelector('[data-master]').oninput = (e) => {
       this.master = Number(e.target.value);
       if (this.output && this.ctx)

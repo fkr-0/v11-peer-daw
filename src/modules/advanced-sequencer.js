@@ -4,6 +4,7 @@ import {
   CONVERTIBLE_TO_PIANOROLL,
   convertToPianoRollConfig,
 } from '../core/convertible-to-pianoroll.js';
+import { escapeHtml } from '../core/html.js';
 import { PianoRollModule } from './piano-roll.js';
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -191,7 +192,7 @@ export class BasicSequencerModule extends ModuleBase {
     }
     return {
       id: `${this.id}-piano-roll`,
-      title: `${this.title} Piano Roll`,
+      title: `${escapeHtml(this.title)} Piano Roll`,
       lengthBeats: this.length * this.stepResolutionBeats,
       stepResolutionBeats: this.stepResolutionBeats,
       notes,
@@ -235,7 +236,7 @@ export class BasicSequencerModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>▦</span><strong>${this.title}</strong><small>CLOCK IN / MIDI OUT · CONVERTIBLE</small></div>
+      <div class="module-head"><span>▦</span><strong>${escapeHtml(this.title)}</strong><small>CLOCK IN / MIDI OUT · CONVERTIBLE</small></div>
       <div class="effect-rack">
         <label>Length
           <select class="mini-input" data-length>${[4, 8, 16].map((value) => `<option value="${value}" ${value === this.length ? 'selected' : ''}>${value}</option>`).join('')}</select>
@@ -246,10 +247,10 @@ export class BasicSequencerModule extends ModuleBase {
         ${this.rows
           .map(
             (row) =>
-              `<div class="zone-row" data-row="${row.id}"><strong>${row.label}</strong><small>${row.note}</small>${row.steps
+              `<div class="zone-row" data-row="${row.id}"><strong>${escapeHtml(row.label)}</strong><small>${escapeHtml(row.note)}</small>${row.steps
                 .map(
                   (step, index) =>
-                    `<span class="step-cell"><button class="mini-button ${step.enabled ? 'active' : ''}" data-step="${index}" title="velocity ${step.velocity} · timing ${step.microTiming}">${step.enabled ? '◆' : '·'}</button><input class="mini-input" data-step-velocity="${index}" type="range" min="0" max="1" step="0.01" value="${step.velocity}" aria-label="${row.label} step ${index + 1} velocity"><input class="mini-input" data-step-micro="${index}" type="range" min="-0.5" max="0.5" step="0.01" value="${step.microTiming}" aria-label="${row.label} step ${index + 1} micro timing"></span>`
+                    `<span class="step-cell"><button class="mini-button ${step.enabled ? 'active' : ''}" data-step="${index}" title="velocity ${step.velocity} · timing ${step.microTiming}">${step.enabled ? '◆' : '·'}</button><input class="mini-input" data-step-velocity="${index}" type="range" min="0" max="1" step="0.01" value="${step.velocity}" aria-label="${escapeHtml(row.label)} step ${index + 1} velocity"><input class="mini-input" data-step-micro="${index}" type="range" min="-0.5" max="0.5" step="0.01" value="${step.microTiming}" aria-label="${escapeHtml(row.label)} step ${index + 1} micro timing"></span>`
                 )
                 .join('')}</div>`
           )
@@ -320,7 +321,7 @@ export class ArrangerModule extends ModuleBase {
   }
   render() {
     if (!this.root) return;
-    this.root.innerHTML = `<div class="module-head"><span>▤</span><strong>${this.title}</strong><small>SCENE CONTROL</small></div><p class="microcopy">bar ${this.bar} · ${this.scenes.join(' → ')}</p>`;
+    this.root.innerHTML = `<div class="module-head"><span>▤</span><strong>${escapeHtml(this.title)}</strong><small>SCENE CONTROL</small></div><p class="microcopy">bar ${this.bar} · ${this.scenes.join(' → ')}</p>`;
   }
 }
 
@@ -461,7 +462,7 @@ export class ArpMidiGeneratorModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>⌁</span><strong>${this.title}</strong><small>MIDI/CONTROL/CLOCK IN · MIDI OUT</small></div>
+      <div class="module-head"><span>⌁</span><strong>${escapeHtml(this.title)}</strong><small>MIDI/CONTROL/CLOCK IN · MIDI OUT</small></div>
       <div class="effect-rack">
         <label>Scale <select class="mini-input" data-param="scale">${['chromatic', 'major', 'minor'].map((value) => `<option value="${value}" ${value === this.scale ? 'selected' : ''}>${value}</option>`).join('')}</select></label>
         <label>Interval <select class="mini-input" data-param="interval">${['scale', 'tritone', 'fifth', 'octave'].map((value) => `<option value="${value}" ${value === this.interval ? 'selected' : ''}>${value}</option>`).join('')}</select></label>

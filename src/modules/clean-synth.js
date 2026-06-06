@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/clean-synth.js
 
 import { ModuleBase, PortType, midiNoteToFrequency, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
 export class CleanSynthModule extends ModuleBase {
@@ -85,7 +86,7 @@ export class CleanSynthModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◌</span><strong>${this.title}</strong><small>MIDI IN / POLISHED AUDIO OUT</small></div>
+      <div class="module-head"><span>◌</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / POLISHED AUDIO OUT</small></div>
       <label>Wave
         <select class="mini-input" data-param="waveform">${['sine', 'triangle', 'sawtooth', 'square'].map((w) => `<option ${w === this.waveform ? 'selected' : ''}>${w}</option>`).join('')}</select>
       </label>

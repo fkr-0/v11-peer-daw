@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/clean-sampler.js
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import {
   createCue,
   deriveBpmFromInterval,
@@ -207,7 +208,7 @@ export class CleanSamplerModule extends ModuleBase {
   hasMeaningfulSampleMetadata() {
     const placeholder = 'drop or choose an audio sample';
     return Boolean(
-      this.sampleMetadata?.filename && this.sampleMetadata.filename !== placeholder ||
+      (this.sampleMetadata?.filename && this.sampleMetadata.filename !== placeholder) ||
         this.sampleMetadata?.sampleLengthMs > 0 ||
         this.sampleMetadata?.bpm ||
         this.sampleMetadata?.type ||
@@ -275,7 +276,7 @@ export class CleanSamplerModule extends ModuleBase {
     const barsHtml = this.extractWaveformPeaks(bars)
       .map((peak) => `<i style="height:${Math.max(4, Math.round(peak * 48))}px"></i>`)
       .join('');
-    return `<div class="waveform sampler-waveform" role="img" aria-label="Waveform preview for ${this.fileName}">${barsHtml}</div>`;
+    return `<div class="waveform sampler-waveform" role="img" aria-label="Waveform preview for ${escapeHtml(this.fileName)}">${barsHtml}</div>`;
   }
 
   connectAudio(destination) {
@@ -290,8 +291,8 @@ export class CleanSamplerModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◈</span><strong>${this.title}</strong><small>MIDI/TRIGGER IN / AUDIO OUT</small></div>
-      <div class="drop-zone" tabindex="0">${this.fileName}</div>
+      <div class="module-head"><span>◈</span><strong>${escapeHtml(this.title)}</strong><small>MIDI/TRIGGER IN / AUDIO OUT</small></div>
+      <div class="drop-zone ${this.buffer ? 'sample-loaded' : ''}" tabindex="0">${this.buffer ? this.fileName : 'drop or choose an audio sample'}</div>
       <input type="file" accept="audio/*" class="file-input">
       ${this.renderWaveform()}
       <div class="effect-rack sampler-controls">
@@ -322,6 +323,10 @@ export class CleanSamplerModule extends ModuleBase {
     const input = this.root.querySelector('input[type=file]');
     const drop = this.root.querySelector('.drop-zone');
     input.addEventListener('change', (e) => e.target.files[0] && this.loadFile(e.target.files[0]));
+    drop.addEventListener('click', () => input.click());
+    drop.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') input.click();
+    });
     drop.addEventListener('dragover', (e) => {
       e.preventDefault();
       drop.classList.add('hot');
@@ -340,20 +345,27 @@ export class CleanSamplerModule extends ModuleBase {
     this.root.querySelectorAll('[data-sample-meta]').forEach((el) => {
       el.addEventListener('change', (e) => {
         const key = e.target.dataset.sampleMeta;
-        const value = key === 'tags' ? e.target.value.split(',').map((item) => item.trim()) : e.target.value;
+        const value =
+          key === 'tags' ? e.target.value.split(',').map((item) => item.trim()) : e.target.value;
         this.setSampleMetadata({ [key]: value });
       });
     });
     this.root.querySelector('[data-add-cue]')?.addEventListener('click', () => {
       const startMs = Number(this.root.querySelector('[data-cue-start]')?.value || 0);
-      this.addCue({ startMs, bpm: this.sampleMetadata.bpm, name: `cue ${this.sampleMetadata.cues.length + 1}` });
+      this.addCue({
+        startMs,
+        bpm: this.sampleMetadata.bpm,
+        name: `cue ${this.sampleMetadata.cues.length + 1}`,
+      });
     });
-    this.root.querySelector('[data-gen-beat-cues]')?.addEventListener('click', () =>
-      this.generateInBeatCues({ startMs: 0, bpm: this.sampleMetadata.bpm || 120, beats: 4 })
-    );
-    this.root.querySelector('[data-sync-library]')?.addEventListener('click', () =>
-      this.syncMetadataToLibrary()
-    );
+    this.root
+      .querySelector('[data-gen-beat-cues]')
+      ?.addEventListener('click', () =>
+        this.generateInBeatCues({ startMs: 0, bpm: this.sampleMetadata.bpm || 120, beats: 4 })
+      );
+    this.root
+      .querySelector('[data-sync-library]')
+      ?.addEventListener('click', () => this.syncMetadataToLibrary());
     this.root
       .querySelector('[data-play]')
       .addEventListener('click', () => this.play(this.rootNote, 0.9));

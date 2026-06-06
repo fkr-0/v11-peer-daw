@@ -2,6 +2,7 @@
 // Dedicated pad-based drum sampler with pad assignment and swing metadata.
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
 const DEFAULT_PADS = Object.freeze([
@@ -24,6 +25,7 @@ function normalizePad(pad = {}) {
     gain: clamp(pad.gain ?? 1, 0, 2),
     pan: clamp(pad.pan ?? 0, -1, 1),
     buffer: pad.buffer || null,
+    fileName: pad.fileName || null,
   };
 }
 
@@ -111,14 +113,18 @@ export class DrumSamplerModule extends ModuleBase {
       ...super.serialize(),
       swing: this.swing,
       swingResolution: this.swingResolution,
-      pads: Array.from(this.pads.values()).map((pad) => ({
-        id: pad.id,
-        note: pad.note,
-        name: pad.name,
-        chokeGroup: pad.chokeGroup,
-        gain: pad.gain,
-        pan: pad.pan,
-      })),
+      pads: Array.from(this.pads.values()).map((pad) => {
+        const serialized = {
+          id: pad.id,
+          note: pad.note,
+          name: pad.name,
+          chokeGroup: pad.chokeGroup,
+          gain: pad.gain,
+          pan: pad.pan,
+        };
+        if (pad.fileName) serialized.fileName = pad.fileName;
+        return serialized;
+      }),
     };
   }
 
@@ -127,6 +133,13 @@ export class DrumSamplerModule extends ModuleBase {
     this.swingResolution = data.swingResolution || this.swingResolution;
     this.pads.clear();
     for (const pad of data.pads || DEFAULT_PADS) this.assignPad(pad.id, pad);
+  }
+
+  async loadPadFile(padId, file) {
+    if (!this.ctx) return null;
+    const data = await file.arrayBuffer();
+    const buffer = await this.ctx.decodeAudioData(data);
+    return this.assignPad(padId, { buffer, fileName: file.name });
   }
 
   connectAudio(destination) {
@@ -143,7 +156,7 @@ export class DrumSamplerModule extends ModuleBase {
     if (!this.root) return;
     const pads = Array.from(this.pads.values());
     this.root.innerHTML = `
-      <div class="module-head"><span>▣</span><strong>${this.title}</strong><small>MIDI IN / PAD AUDIO OUT</small></div>
+      <div class="module-head"><span>▣</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / PAD AUDIO OUT</small></div>
       <div class="effect-rack">
         <label>Swing
           <select class="mini-input" data-param="swing">${['swing50', 'swing54', 'swing57', 'swing60', 'swing62', 'swing66', 'swing75', 'swing90'].map((value) => `<option value="${value}" ${value === this.swing ? 'selected' : ''}>${value}</option>`).join('')}</select>
@@ -152,14 +165,31 @@ export class DrumSamplerModule extends ModuleBase {
           <select class="mini-input" data-param="swingResolution">${['1/4', '1/8', '1/16'].map((value) => `<option value="${value}" ${value === this.swingResolution ? 'selected' : ''}>${value}</option>`).join('')}</select>
         </label>
       </div>
-      <div class="pad-grid">${pads.map((pad) => `<button class="mini-button" data-pad="${pad.id}"><strong>${pad.id}</strong><small>${pad.note} · ${pad.name}</small></button>`).join('')}</div>
-      <p class="microcopy">Assign pads to MIDI notes and trigger them from piano-roll or sequencer modules.</p>
+      <div class="pad-grid">${pads.map((pad) => `<button class="mini-button pad-cell ${pad.buffer ? 'pad-loaded' : 'pad-empty'}" data-pad="${pad.id}"><strong>${pad.id}</strong><small>${pad.note} · ${escapeHtml(pad.name)}</small><span class="pad-sample-tag">${pad.buffer ? pad.fileName || 'loaded' : 'no sample'}</span></button>`).join('')}</div>
+      <p class="microcopy">${pads.filter((p) => p.buffer).length}/${pads.length} pads loaded · drop audio on pads or use the editor to assign samples.</p>
     `;
     this.root.querySelectorAll('[data-param]').forEach((el) => {
       el.addEventListener('change', (event) => {
         if (event.target.dataset.param === 'swing') this.swing = event.target.value;
         if (event.target.dataset.param === 'swingResolution')
           this.swingResolution = event.target.value;
+      });
+    });
+    this.root.querySelectorAll('[data-pad]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const pad = this.pads.get(el.dataset.pad);
+        if (pad) this.trigger(pad.note, 0.85);
+      });
+      el.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        el.classList.add('pad-drop-hot');
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('pad-drop-hot'));
+      el.addEventListener('drop', (e) => {
+        e.preventDefault();
+        el.classList.remove('pad-drop-hot');
+        const file = e.dataTransfer.files[0];
+        if (file) this.loadPadFile(el.dataset.pad, file);
       });
     });
   }

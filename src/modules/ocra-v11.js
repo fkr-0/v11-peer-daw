@@ -2,6 +2,7 @@
 // Redesigned OCRA Module - Full ORCA functionality as modular component
 
 import { ModuleBase, PortType, createMidiPacket, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 // ORCA Constants
 const GW = 32;
@@ -374,7 +375,7 @@ export class OcraV11Module extends ModuleBase {
       <div class="ocra-v11-container">
         <div class="module-head">
           <span>▧</span>
-          <strong>${this.title}</strong>
+          <strong>${escapeHtml(this.title)}</strong>
           <small>ORCA V11 · CLOCK IN / MIDI + AUDIO OUT</small>
         </div>
 

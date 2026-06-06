@@ -37,7 +37,9 @@ describe('default synth preset bank', () => {
     );
 
     expect(listSynthPresets({ category: 'vangelis-bladerunner' })).toHaveLength(3);
-    expect(listSynthPresets({ synth: 'fmsynth' }).some((preset) => preset.slug === 'fm-epiano-glass')).toBe(true);
+    expect(
+      listSynthPresets({ synth: 'fmsynth' }).some((preset) => preset.slug === 'fm-epiano-glass')
+    ).toBe(true);
   });
 
   test('normalizes presets and round-trips the bank as JSON', () => {
@@ -116,7 +118,10 @@ describe('synth module preset import/export APIs', () => {
     expect(synth.morph).toBe(0.88);
     expect(synth.cutoff).toBe(7600);
     expect(synth.exportPreset()).toEqual(
-      expect.objectContaining({ synth: 'wavetablesynth', params: expect.objectContaining({ wavetable: 'glass' }) })
+      expect.objectContaining({
+        synth: 'wavetablesynth',
+        params: expect.objectContaining({ wavetable: 'glass' }),
+      })
     );
   });
 

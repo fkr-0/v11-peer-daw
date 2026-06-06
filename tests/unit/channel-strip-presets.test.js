@@ -143,6 +143,17 @@ describe('channel strip filter-chain presets', () => {
     expect(strip.gainValue).toBe(0.5);
     expect(strip.filters[0].frequency).toBe(800);
     expect(strip.filterNodes[0].frequency.value).toBe(800);
-    expect(strip.serialize()).toEqual(strip.exportPreset());
+    expect(strip.exportPreset()).toEqual(
+      expect.objectContaining({ schemaVersion: 1, type: 'v11.channel-strip', title: 'JSON Bus' })
+    );
+    expect(strip.serialize()).toEqual(
+      expect.objectContaining({
+        id: 'channel-c',
+        kind: 'mixer-channel',
+        schemaVersion: 1,
+        type: 'v11.channel-strip',
+        title: 'JSON Bus',
+      })
+    );
   });
 });

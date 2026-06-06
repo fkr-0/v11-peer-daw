@@ -2,6 +2,7 @@
 // Extensible synth modules for the consolidated peer DAW.
 
 import { ModuleBase, PortType, midiNoteToFrequency, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { packetAudioTime } from '../core/scheduler.js';
 import { findSynthPreset, listSynthPresets, normalizeSynthPreset } from './synth-presets.js';
 
@@ -128,7 +129,7 @@ export class PolySynthModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>♬</span><strong>${this.title}</strong><small>MIDI IN / POLY AUDIO OUT</small></div>
+      <div class="module-head"><span>♬</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / POLY AUDIO OUT</small></div>
       <label>Wave
         <select class="mini-input" data-param="waveform">${['sine', 'triangle', 'sawtooth', 'square'].map((w) => `<option ${w === this.waveform ? 'selected' : ''}>${w}</option>`).join('')}</select>
       </label>
@@ -262,7 +263,7 @@ export class DrumSynthModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◒</span><strong>${this.title}</strong><small>MIDI IN / DRUM AUDIO OUT</small></div>
+      <div class="module-head"><span>◒</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / DRUM AUDIO OUT</small></div>
       <div class="effect-rack">
         <span>C1 kick</span><span>D1 snare</span><span>F#1 hat</span><span>A#1 clap</span>
       </div>
@@ -290,10 +291,12 @@ function makeDriveCurve(amount = 0.4, samples = 256) {
 class VoiceModuleBase extends ModuleBase {
   receive(packet) {
     if (packet.kind === PortType.MIDI) {
-      if (packet.type === 'note-on') this.noteOn(packet.note, packet.velocity ?? 0.75, packetAudioTime(this.ctx, packet));
+      if (packet.type === 'note-on')
+        this.noteOn(packet.note, packet.velocity ?? 0.75, packetAudioTime(this.ctx, packet));
       if (packet.type === 'note-off') this.noteOff(packet.note, packetAudioTime(this.ctx, packet));
     }
-    if (packet.kind === PortType.CONTROL && packet.type === 'param') this.setParam?.(packet.target, packet.value);
+    if (packet.kind === PortType.CONTROL && packet.type === 'param')
+      this.setParam?.(packet.target, packet.value);
   }
 
   connectAudio(destination) {
@@ -389,7 +392,11 @@ export class SubtractiveAnalogSynthModule extends VoiceModuleBase {
     ];
     amp.gain.setValueAtTime(0.0001, when);
     amp.gain.exponentialRampToValueAtTime(Math.max(0.001, velocity), when + this.attack);
-    amp.gain.setTargetAtTime(Math.max(0.001, velocity * this.sustain), when + this.attack, this.decay);
+    amp.gain.setTargetAtTime(
+      Math.max(0.001, velocity * this.sustain),
+      when + this.attack,
+      this.decay
+    );
     setAudioParam(this.filter.frequency, this.cutoff + this.filterEnvelopeAmount, when, 0.01);
     setAudioParam(this.filter.frequency, this.cutoff, when + this.attack, this.decay);
     amp.connect(this.filter);
@@ -438,13 +445,17 @@ export class SubtractiveAnalogSynthModule extends VoiceModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◐</span><strong>${this.title}</strong><small>MIDI IN / ANALOG AUDIO OUT</small></div>
+      <div class="module-head"><span>◐</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / ANALOG AUDIO OUT</small></div>
       <label>Cutoff <input class="mini-input" data-param="cutoff" type="range" min="80" max="12000" value="${this.cutoff}"></label>
       <label>Resonance <input class="mini-input" data-param="resonance" type="range" min="0.1" max="24" step="0.1" value="${this.resonance}"></label>
       <label>Drive <input class="mini-input" data-param="driveAmount" type="range" min="0" max="1" step="0.01" value="${this.driveAmount}"></label>
       <p class="microcopy">Three-oscillator subtractive voice: saw, pulse, sub, resonant low-pass filter, envelope, and drive.</p>
     `;
-    this.root.querySelectorAll('[data-param]').forEach((el) => el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value)));
+    this.root
+      .querySelectorAll('[data-param]')
+      .forEach((el) =>
+        el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value))
+      );
   }
 }
 
@@ -546,13 +557,17 @@ export class FmPhaseSynthModule extends VoiceModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>∿</span><strong>${this.title}</strong><small>MIDI IN / FM AUDIO OUT</small></div>
+      <div class="module-head"><span>∿</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / FM AUDIO OUT</small></div>
       <label>Carrier ratio <input class="mini-input" data-param="carrierRatio" type="number" step="0.01" value="${this.carrierRatio}"></label>
       <label>Mod ratio <input class="mini-input" data-param="modulatorRatio" type="number" step="0.01" value="${this.modulatorRatio}"></label>
       <label>Index <input class="mini-input" data-param="modulationIndex" type="range" min="0" max="12" step="0.01" value="${this.modulationIndex}"></label>
       <p class="microcopy">Two-operator FM/phase-style voice: modulator depth drives carrier frequency for metallic and bell tones.</p>
     `;
-    this.root.querySelectorAll('[data-param]').forEach((el) => el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value)));
+    this.root
+      .querySelectorAll('[data-param]')
+      .forEach((el) =>
+        el.addEventListener('input', (e) => this.setParam(e.target.dataset.param, e.target.value))
+      );
   }
 }
 
@@ -672,7 +687,7 @@ export class WavetableSynthModule extends VoiceModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>≋</span><strong>${this.title}</strong><small>MIDI IN / WAVETABLE AUDIO OUT</small></div>
+      <div class="module-head"><span>≋</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / WAVETABLE AUDIO OUT</small></div>
       <label>Table <select class="mini-input" data-param="wavetable">${['classic', 'bright', 'hollow', 'glass'].map((name) => `<option value="${name}" ${name === this.wavetable ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
       <label>Morph <input class="mini-input" data-param="morph" type="range" min="0" max="1" step="0.01" value="${this.morph}"></label>
       <label>Cutoff <input class="mini-input" data-param="cutoff" type="range" min="180" max="12000" value="${this.cutoff}"></label>
@@ -698,7 +713,16 @@ function applySynthPresetToModule(module, synthKey, preset = {}) {
 
 function exportSynthPresetFromModule(module, synthKey) {
   const serialized = module.serialize();
-  const { id: _id, title: _title, kind: _kind, inputs: _inputs, outputs: _outputs, moduleType: _moduleType, noteMap: _noteMap, ...params } = serialized;
+  const {
+    id: _id,
+    title: _title,
+    kind: _kind,
+    inputs: _inputs,
+    outputs: _outputs,
+    moduleType: _moduleType,
+    noteMap: _noteMap,
+    ...params
+  } = serialized;
   return normalizeSynthPreset({
     synth: synthKey,
     slug: module.currentPreset?.slug || `${module.id}-preset`,

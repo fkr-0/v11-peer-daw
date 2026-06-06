@@ -2,6 +2,7 @@
 
 import { PeernetLobby } from '../../vendor/peernet-lib.js';
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeAttr, escapeHtml } from '../core/html.js';
 
 export class PeerBridgeModule extends ModuleBase {
   constructor(config = {}) {
@@ -22,7 +23,9 @@ export class PeerBridgeModule extends ModuleBase {
     this.lobby = null;
     this.status = config.status || 'offline';
     this.lastPilot = config.lastPilot || 'pilot';
-    this.packetLog = Array.isArray(config.packetLog) ? config.packetLog.map((packet) => ({ ...packet })) : [];
+    this.packetLog = Array.isArray(config.packetLog)
+      ? config.packetLog.map((packet) => ({ ...packet }))
+      : [];
   }
 
   receive(packet, inputId) {
@@ -66,10 +69,10 @@ export class PeerBridgeModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>⌁</span><strong>${this.title}</strong><small>PEER CONTROL</small></div>
-      <input class="mini-input" placeholder="pilot name" value="${this.lastPilot || 'pilot'}">
+      <div class="module-head"><span>⌁</span><strong>${escapeHtml(this.title)}</strong><small>PEER CONTROL</small></div>
+      <input class="mini-input" placeholder="pilot name" value="${escapeAttr(this.lastPilot || 'pilot')}">
       <button class="mini-button">CONNECT</button>
-      <p class="microcopy">Status: ${this.status}. Broadcasts JSON-safe midi/control packets.</p>
+      <p class="microcopy">Status: ${escapeHtml(this.status)}. Broadcasts JSON-safe midi/control packets.</p>
     `;
     this.root
       .querySelector('button')

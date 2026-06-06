@@ -52,7 +52,13 @@ describe('sample metadata helpers', () => {
         tags: ['motown', 'drums'],
       })
     );
-    expect(sample.cues[0]).toEqual({ startMs: 120, endMs: 600, bpm: 100, upbeatMs: 40, name: 'bar 1' });
+    expect(sample.cues[0]).toEqual({
+      startMs: 120,
+      endMs: 600,
+      bpm: 100,
+      upbeatMs: 40,
+      name: 'bar 1',
+    });
     expect(sample.slices[0]).toEqual({ startMs: 120, name: 'kick' });
   });
 
@@ -102,7 +108,11 @@ describe('SampleLibrary', () => {
     });
 
     expect(library.findSample('kick.wav')).toEqual(
-      expect.objectContaining({ filename: 'kick.wav', sampleLengthMs: 500, path: '/drums/kick.wav' })
+      expect.objectContaining({
+        filename: 'kick.wav',
+        sampleLengthMs: 500,
+        path: '/drums/kick.wav',
+      })
     );
     expect(library.listSamples().map((sample) => sample.path)).toEqual([
       '/drums/kick.wav',
@@ -139,7 +149,13 @@ describe('project sample usage and missing sample slots', () => {
   test('lists all project-used samples with availability state', () => {
     const project = {
       modules: [
-        { id: 'sampler-1', moduleType: 'sampler', title: 'Lead Sampler', fileName: 'lead.wav', sampleRef: 'sampler-1/sample' },
+        {
+          id: 'sampler-1',
+          moduleType: 'sampler',
+          title: 'Lead Sampler',
+          fileName: 'lead.wav',
+          sampleRef: 'sampler-1/sample',
+        },
         {
           id: 'drums-1',
           moduleType: 'drumsampler',
@@ -150,18 +166,36 @@ describe('project sample usage and missing sample slots', () => {
       assets: [{ id: 'drums-1/kick', label: 'kick.wav' }],
     };
     const library = new SampleLibrary();
-    library.addSample('/samples', { filename: 'lead.wav', sampleLengthMs: 800, sampleRef: 'sampler-1/sample' });
+    library.addSample('/samples', {
+      filename: 'lead.wav',
+      sampleLengthMs: 800,
+      sampleRef: 'sampler-1/sample',
+    });
 
     expect(detectProjectSampleUsage(project, library)).toEqual([
-      expect.objectContaining({ id: 'sampler-1/sample', filename: 'lead.wav', availability: 'available' }),
-      expect.objectContaining({ id: 'drums-1/kick', filename: 'kick.wav', availability: 'embedded' }),
+      expect.objectContaining({
+        id: 'sampler-1/sample',
+        filename: 'lead.wav',
+        availability: 'available',
+      }),
+      expect.objectContaining({
+        id: 'drums-1/kick',
+        filename: 'kick.wav',
+        availability: 'embedded',
+      }),
     ]);
   });
 
   test('detects one card-worthy slot per unresolved project sample reference', () => {
     const project = {
       modules: [
-        { id: 'sampler-1', moduleType: 'sampler', title: 'Lead Sampler', fileName: 'lead.wav', sampleRef: 'sampler-1/sample' },
+        {
+          id: 'sampler-1',
+          moduleType: 'sampler',
+          title: 'Lead Sampler',
+          fileName: 'lead.wav',
+          sampleRef: 'sampler-1/sample',
+        },
         {
           id: 'drums-1',
           moduleType: 'drumsampler',
@@ -181,7 +215,11 @@ describe('project sample usage and missing sample slots', () => {
       assets: [{ id: 'drums-1/kick', label: 'kick.wav' }],
     };
     const library = new SampleLibrary();
-    library.addSample('/samples', { filename: 'zone-a.wav', sampleLengthMs: 800, sampleRef: 'multi-1/zone-a' });
+    library.addSample('/samples', {
+      filename: 'zone-a.wav',
+      sampleLengthMs: 800,
+      sampleRef: 'multi-1/zone-a',
+    });
 
     const slots = detectMissingSampleSlots(project, library);
 
@@ -209,12 +247,21 @@ describe('SampleSyncManager', () => {
     const progress = [];
     sync.on('progress', (event) => progress.push(event));
 
-    sync.requestSample({ slotId: 'sampler-1/sample', sampleRef: 'sampler-1/sample', filename: 'lead.wav', peerId: 'peer-1' });
+    sync.requestSample({
+      slotId: 'sampler-1/sample',
+      sampleRef: 'sampler-1/sample',
+      filename: 'lead.wav',
+      peerId: 'peer-1',
+    });
     expect(sent).toEqual([
       {
         type: 'v11-daw:sample-request',
         peerId: 'peer-1',
-        payload: { slotId: 'sampler-1/sample', sampleRef: 'sampler-1/sample', filename: 'lead.wav' },
+        payload: {
+          slotId: 'sampler-1/sample',
+          sampleRef: 'sampler-1/sample',
+          filename: 'lead.wav',
+        },
       },
     ]);
 
@@ -231,8 +278,77 @@ describe('SampleSyncManager', () => {
 
     expect(progress.map((event) => event.progress)).toEqual([0, 0.4, 0.8, 1]);
     expect(library.findSample('lead.wav')).toEqual(
-      expect.objectContaining({ filename: 'lead.wav', sampleLengthMs: 1000, sampleRef: 'sampler-1/sample' })
+      expect.objectContaining({
+        filename: 'lead.wav',
+        sampleLengthMs: 1000,
+        sampleRef: 'sampler-1/sample',
+      })
     );
-    expect(library.findSample('lead.wav').bytes).toEqual(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    expect(library.findSample('lead.wav').bytes).toEqual(
+      Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    );
+  });
+
+  test('emits incoming requests and answers from the local library with chunked packets', () => {
+    const library = new SampleLibrary();
+    library.addSample('/local', {
+      filename: 'lead.wav',
+      sampleRef: 'sampler-1/sample',
+      sampleLengthMs: 1000,
+      type: 'audio/wav',
+      bytes: Uint8Array.from([1, 2, 3, 4, 5]),
+    });
+    const sent = [];
+    const requests = [];
+    const sync = new SampleSyncManager({
+      library,
+      send: (packet) => sent.push(packet),
+      chunkSize: 2,
+    });
+    sync.on('request', (event) => requests.push(event));
+
+    sync.receivePacket({
+      type: 'v11-daw:sample-request',
+      peerId: 'peer-1',
+      payload: { slotId: 'sampler-1/sample', sampleRef: 'sampler-1/sample', filename: 'lead.wav' },
+    });
+    expect(requests).toEqual([
+      {
+        peerId: 'peer-1',
+        slotId: 'sampler-1/sample',
+        sampleRef: 'sampler-1/sample',
+        filename: 'lead.wav',
+      },
+    ]);
+
+    expect(sync.answerRequest(requests[0])).toBe(true);
+    expect(sent).toEqual([
+      expect.objectContaining({
+        type: 'v11-daw:sample-start',
+        peerId: 'peer-1',
+        payload: expect.objectContaining({
+          slotId: 'sampler-1/sample',
+          sampleRef: 'sampler-1/sample',
+          filename: 'lead.wav',
+          totalBytes: 5,
+          metadata: expect.objectContaining({ sampleLengthMs: 1000, type: 'audio/wav' }),
+        }),
+      }),
+      {
+        type: 'v11-daw:sample-chunk',
+        peerId: 'peer-1',
+        payload: { slotId: 'sampler-1/sample', bytes: Uint8Array.from([1, 2]) },
+      },
+      {
+        type: 'v11-daw:sample-chunk',
+        peerId: 'peer-1',
+        payload: { slotId: 'sampler-1/sample', bytes: Uint8Array.from([3, 4]) },
+      },
+      {
+        type: 'v11-daw:sample-complete',
+        peerId: 'peer-1',
+        payload: { slotId: 'sampler-1/sample', bytes: Uint8Array.from([5]) },
+      },
+    ]);
   });
 });

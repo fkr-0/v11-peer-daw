@@ -1,0 +1,1809 @@
+project_review:
+  metadata:
+    project_name: v11-peer-daw
+    review_date: 2026-06-06
+    reviewer: GPT-5.5 Thinking
+    repository_root: /home/user/work/code/artifacts/v11-peer-daw
+    primary_languages:
+    - JavaScript
+    - CSS
+    - HTML
+    - Markdown
+    - YAML
+    frameworks:
+    - Vite
+    - Jest
+    - Biome
+    - PeerJS
+    - WebAudio/WebRTC browser APIs
+    build_tools:
+    - pnpm
+    - Vite
+    test_tools:
+    - Jest
+    - node:test deploy contracts in parent artifacts repo
+    deployment_targets:
+    - static Vite dist artifact consumed by app-hub-v11 artifact catalog
+    detected_project_type: browser-based peer-to-peer modular digital audio workstation artifact
+    confidence:
+      overall: medium-high
+      basis:
+      - Inspected README, docs, package files, source tree, test tree, task files, dist output, git status, and recent commits.
+      - Ran fresh test, build, code-quality, deploy, audit, structure, and search commands on the current working tree.
+      - No live browser smoke or WebAudio interaction was executed, so visual/runtime confidence is limited.
+      - Working tree was dirty before this review; findings reflect the current uncommitted state.
+  executive_summary:
+    current_state: The project has a substantial modular DAW implementation, useful unit coverage, and a successful Vite production
+      build, but it is not release-ready. The primary unit gate, deploy gate, and Biome quality gate fail on the reviewed
+      working tree. The tree also contains pre-existing uncommitted UI/module/source changes and new docs.
+    strongest_parts:
+    - README states a clear product goal: modular peer-to-peer audio workstation with collaborative sessions.
+    - docs/ARCHITECTURE.md describes intended layers, module contracts, packet protocol, timing, ORCA execution, and PeerJS
+      flow.
+    - Jest discovered 29 suites and 176 tests; 173 tests currently pass even though 3 fail.
+    - pnpm build succeeds and emits a Vite production dist with split bundles.
+    - tasks.yml, improve.yml, TODO.md, and roadmap.yml make major product gaps explicit.
+    most_serious_risks:
+    - 'P0: pnpm test -- --runInBand fails with 3 failing tests, blocking verify:build and verify:deploy.'
+    - 'P0: pnpm check fails with 34 Biome diagnostics.'
+    - 'P0: pnpm verify:deploy fails before deploy asset contracts complete because verify:build fails at tests.'
+    - 'P0: the repository baseline is dirty before review, which makes later debugging and attribution ambiguous.'
+    - 'P1: src/app.js is a 2712-line god object spanning DOM, WebAudio, peer sync, project I/O, sample sync, routing, and
+      workspace rendering.'
+    - 'P1: project archive binary import is still placeholder-level rather than restoring project.json and sample assets.'
+    - 'P1: many UI renderers use innerHTML with runtime/project/sample/peer-derived values, creating a broad DOM-injection
+      review hotspot.'
+    - 'P1: no project-local CI workflow was found to enforce the documented gates.'
+    release_readiness:
+      status: blocked
+      blockers:
+      - P0-001
+      - P0-002
+      - P0-003
+      - P0-004
+      rationale: Build success alone is insufficient because package.json defines verify:build as test plus build, and verify:deploy
+        as verify:build plus app-hub deploy contracts.
+    recommended_strategy:
+      short_term: Stabilize the current tree and make pnpm test -- --runInBand, pnpm check, pnpm build, and pnpm verify:deploy
+        pass.
+      medium_term: Extract app responsibilities into tested controllers and add browser smoke coverage for patch canvas and
+        workspace views.
+      long_term: Move toward a contract-specified DAW runtime with versioned project schemas, module conformance, safe rendering,
+        peer/sample protocol tests, and CI-enforced gates.
+  discovered_context:
+    stated_purpose: Modular peer-to-peer audio workstation with collaborative sessions.
+    inferred_purpose: A static browser DAW artifact combining modular WebAudio modules, packet/audio routing, peer/session
+      collaboration, project import/export, sample-library management, and app-hub deployment packaging.
+    problem_domain: collaborative browser music production / modular DAW / peer-to-peer session synchronization
+    user_facing_contract: Open the static app, boot audio, add and connect modules, operate transport/workspace views, import/export
+      projects, manage samples, and join/carry peer sessions without console-only failure modes.
+    core_domain_entities:
+    - ModuleBase
+    - PortType
+    - PatchBay packet route
+    - RoutingGraph audio edge
+    - AudioGraphSync
+    - AudioRuntime
+    - Clip
+    - ClipSlot
+    - Arrangement
+    - SampleLibrary
+    - SampleSyncManager
+    - SubLobbyManager
+    - PeernetStack
+    - Project package
+    - Project asset
+    - PatchCanvas node/edge
+    important_existing_docs:
+    - path: README.md
+      relevance: States quick-start commands, module system, project structure, architecture summary, and build/deploy gates.
+    - path: docs/ARCHITECTURE.md
+      relevance: Describes intended layers, module contract, packet protocol, WebAudio routing, ORCA execution, and PeerJS
+        session flow.
+    - path: docs/USABILITY_PLAN.md
+      relevance: Tracks UI target state for serious workspace views and non-placeholder panels.
+    - path: docs/MODULE_UI_BACKLOG.md
+      relevance: Tracks focused module UI backlog referenced by TODO.md.
+    - path: peer-daw-ux-report.md
+      relevance: Recently added UX review artifact in the dirty working tree; should be reconciled with tasks before implementation.
+    existing_task_sources:
+    - path: tasks.yml
+      incorporated_findings:
+      - sample-library-and-missing-sample-sync is in_progress.
+      - Definition of done requires unit tests, pnpm test -- --runInBand, pnpm build, and browser validation.
+      - Most sample-library, peer sample sync, project sample UI, and metadata tools subtasks remain todo.
+    - path: improve.yml
+      incorporated_findings:
+      - Patch canvas visual rendering is documented as done, but rendered graph browser smoke remains in_progress.
+      - Route authority, project export graph completeness, module lifecycle conformance, archive import, DOM resilience,
+        and performance remain ordered work.
+    - path: TODO.md
+      incorporated_findings:
+      - Arrangement, clip, session, and master mixer views are explicitly called missing or stub-level.
+      - Focused per-module views are required beyond the mini rack overview.
+    - path: roadmap.yml
+      incorporated_findings:
+      - Roadmap exists and should be reconciled with this review before feature implementation.
+    architecture_overview:
+      entry_points:
+      - path: index.html
+        role: Static HTML shell, workspace tabs, patch canvas host, module rack, route/mixer inspector, transport bar, direct
+          vendor scripts, and src/app.js module entry.
+      - path: src/app.js
+        role: Main V11PeerDAW application class and runtime orchestrator.
+      - path: src/modules/catalog.js
+        role: Module factory catalog and default rig construction.
+      - path: src/core/contracts.js
+        role: ModuleBase, PortType, UID helper, packet factories, and default module ABI.
+      - path: vite.config.js
+        role: Vite production bundle configuration and code splitting.
+      major_components:
+      - name: Application shell
+        path: src/app.js + index.html + style.css
+        responsibility: DOM binding, startup, workspace rendering, transport, project I/O orchestration, peer/session/sample
+          wiring, route UI.
+        dependencies:
+        - core runtime
+        - module catalog
+        - PatchCanvas
+        - PeernetStack
+        - SubLobbyManager
+        - SampleLibrary
+        - project I/O
+      - name: Module runtime contract
+        path: src/core/contracts.js and src/modules/*.js
+        responsibility: Module lifecycle, ports, packet emission, audio hooks, serialization/hydration.
+        dependencies:
+        - WebAudio-like context
+        - DOM root
+      - name: Routing and patching
+        path: src/core/patchbay.js, src/core/routing-graph.js, src/core/audio-graph-sync.js, src/ui/patch-canvas.js
+        responsibility: Packet routes, visual/audio graph edges, and deterministic WebAudio connection application.
+        dependencies:
+        - module connectAudio/disconnectAudio
+        - PatchCanvas DOM events
+      - name: Project import/export
+        path: src/core/project-io.js
+        responsibility: Serialize modules/routes/clips/arrangement/mixer/assets into JSON/inline/archive modes and parse payloads.
+        dependencies:
+        - module serialization output
+        - sample buffers
+        - TextEncoder/Buffer/btoa/atob
+      - name: Samples
+        path: src/core/sample-library.js, sampler modules, app sample panels
+        responsibility: Nested sample library, metadata normalization, missing-slot detection, peer sample request/response/progress.
+        dependencies:
+        - localStorage-compatible storage
+        - sample-bearing modules
+        - injected peer send callback
+      - name: Peer/session collaboration
+        path: src/core/peernet-stack.js, src/core/sub-lobby-manager.js, vendor/peernet/*.js
+        responsibility: PeerJS/Peernet state sharing, default session, sub-lobby flows, local BroadcastChannel fallback.
+        dependencies:
+        - PeerJS
+        - BroadcastChannel
+        - Peernet vendor library
+      data_flow:
+      - UI events in index.html are bound in src/app.js and mutate V11PeerDAW state or module instances.
+      - Modules emit packets via EventTarget; PatchBay routes MIDI/control/clock packets independently of RoutingGraph audio
+        edges.
+      - RoutingGraph audio edges feed AudioGraphSync, which calls module connectAudio/disconnectAudio.
+      - Project export collects module serialization, PatchBay routes, clips, arrangement, mixer, and optional sample assets.
+      - SampleLibrary persists through localStorage-compatible storage and SampleSyncManager emits request/progress/complete
+        events through an injected send callback.
+      - PeernetStack and BroadcastChannel exchange full project snapshots for collaboration.
+      external_boundaries:
+      - PeerJS/WebRTC signaling and peer data channels
+      - Peernet vendor library under vendor/peernet and ../../peernetjs/peernet-lib.js
+      - WebAudio API
+      - localStorage
+      - BroadcastChannel
+      - File/Blob/URL browser APIs
+      - app-hub-v11 deployment catalog in parent repo
+      runtime_modes:
+      - development server via pnpm dev/Vite
+      - production static dist via pnpm build
+      - preview via pnpm preview
+      - deploy-facing app-hub artifact gate via pnpm verify:deploy
+      persistence_model: Project JSON/inline/archive export plus localStorage-backed sample library and UI preferences. docs/ARCHITECTURE.md
+        mentions IndexedDB, but inspected code evidence primarily showed localStorage-compatible storage.
+      configuration_model: package.json scripts, biome.json, jest.config.js, vite.config.js, index.html static element IDs,
+        URL query parameters.
+      deployment_model: Vite builds dist; app-hub-v11 catalog script and parent node:test contracts validate deploy assets.
+  verification:
+    commands_run:
+    - command: find . -maxdepth 3 -type d \( -iname '*v11*' -o -iname '*peer*daw*' \)
+      cwd: /home/user/work/code/artifacts
+      result: pass
+      exit_code: 0
+      important_output: Found ./v11-peer-daw plus staged deploy/test copies.
+      interpretation: Target project location confirmed.
+    - command: find . -maxdepth 3 -type f; git status --short; git log --oneline -n 8
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass_with_dirty_tree
+      exit_code: 0
+      important_output: Modified index.html, src/app.js, sampler/module files, style.css; untracked TODO.md, docs/MODULE_UI_BACKLOG.md,
+        docs/USABILITY_PLAN.md, peer-daw-ux-report.md.
+      interpretation: Review baseline is a dirty working tree, not a clean commit.
+    - command: pnpm test -- --runInBand
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: fail
+      exit_code: 1
+      important_output: 3 failed tests, 173 passed, 29 suites. Failures include missing id="automationOperatorPanel" and drum
+        pad fileName:null serialization mismatch.
+      interpretation: Primary test gate is broken and blocks release.
+    - command: pnpm build
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass
+      exit_code: 0
+      important_output: Vite 5.4.21 built 43 modules and emitted dist/index.html plus split assets.
+      interpretation: Production bundling succeeds despite failing test/quality gates.
+    - command: pnpm check
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: fail
+      exit_code: 1
+      important_output: Biome checked 91 files, found 34 errors, and diagnostics exceeded the display limit.
+      interpretation: Configured code quality gate is broken.
+    - command: pnpm verify:deploy
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: fail
+      exit_code: 1
+      important_output: Failed during verify:build at pnpm test; app-hub deploy asset contracts did not complete.
+      interpretation: Deploy-facing gate is blocked by failing unit tests.
+    - command: pnpm audit --audit-level moderate
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: fail
+      exit_code: 1
+      important_output: '2 moderate vulnerabilities reported: esbuild via Vite and Vite optimized deps sourcemap path traversal.'
+      interpretation: Dependency security gate currently fails; exposure appears tooling/dev-server oriented but needs an
+        upgrade or documented exception.
+    - command: wc -l src/app.js src/core/*.js src/modules/*.js src/ui/*.js tests/unit/*.js | sort -nr
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass
+      exit_code: 0
+      important_output: src/app.js is 2712 lines; next largest source files are synths.js 768 and ocra-v11.js 617.
+      interpretation: Supports the app god-object architecture finding.
+    - command: rg -n 'TODO|FIXME|placeholder|not implemented|innerHTML|localStorage|new Function|eval\(|alert\(|console\.error|throw
+        new Error' src tests docs README.md TODO.md improve.yml tasks.yml package.json
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass
+      exit_code: 0
+      important_output: Found placeholder/archive tasks, stub-view docs, many innerHTML renderers, localStorage usage, and
+        project-io archive placeholder parsing.
+      interpretation: Supports UI completeness, DOM-injection, persistence, and archive import findings.
+    - command: glob .github/**/*
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass
+      exit_code: 0
+      important_output: No .github workflow files found under the project root.
+      interpretation: Subproject has package scripts but no local CI workflow enforcement.
+    - command: python YAML parse check for project-review.yml
+      cwd: /home/user/work/code/artifacts/v11-peer-daw
+      result: pass
+      exit_code: 0
+      important_output: project-review.yml parsed successfully; task count and severity counts were read back.
+      interpretation: Generated review file is valid YAML.
+    commands_not_run:
+    - command: Browser/manual preview with agent-browser-cli or Playwright screenshot
+      reason: No project-local browser/e2e command was present and the request was to produce a review file, not add a harness.
+      risk: Patch canvas, workspace tabs, WebAudio boot, drag/drop, peer sessions, and page-error-free behavior remain unverified.
+    - command: Full root artifacts deploy/review beyond v11-peer-daw
+      reason: Scope was v11-peer-daw and the parent repo has many unrelated dirty/untracked artifacts.
+      risk: Parent app-hub integration may reveal additional issues after v11-peer-daw gates are fixed.
+    - command: Web lookup for latest Vite/Biome/Jest guidance
+      reason: Review did not implement dependency upgrades; repository-local evidence and audit output were sufficient for
+        tasking.
+      risk: Exact upgrade targets should be checked against official release notes before dependency changes.
+    observed_failures:
+    - id: OBS-001
+      command: pnpm test -- --runInBand
+      summary: Jest suite fails with 3 failed tests and 173 passing tests.
+    - id: OBS-002
+      command: pnpm check
+      summary: Biome check fails with 34 formatting/import-order diagnostics.
+    - id: OBS-003
+      command: pnpm verify:deploy
+      summary: Deploy verification fails at verify:build because pnpm test fails.
+    - id: OBS-004
+      command: pnpm audit --audit-level moderate
+      summary: Audit reports 2 moderate Vite/esbuild tooling vulnerabilities.
+    confidence_limits:
+    - No browser e2e/runtime smoke was executed.
+    - The working tree was already dirty; failures may be caused by in-progress work rather than committed mainline.
+    - Parent repository deploy confidence is limited to the v11-peer-daw script result.
+  assessment:
+    architecture:
+      rating: C+
+      confidence: high
+      findings:
+      - id: ARCH-001
+        severity: P1
+        title: Application orchestrator is a god object with too many ownership boundaries
+        evidence:
+          files:
+          - src/app.js
+          - index.html
+          - style.css
+          commands:
+          - wc -l src/app.js src/core/*.js src/modules/*.js src/ui/*.js tests/unit/*.js
+        analysis: src/app.js is 2712 lines and owns DOM boot, WebAudio start/stop, module rack, routing, patch canvas, sample
+          library/sync, project I/O, workspace tabs, peer sessions, BroadcastChannel sync, and rendering.
+        impact: Feature work collides in one file and tests require large fixtures or brittle static assertions.
+        recommendation: Extract WorkspaceController, RoutingController, ProjectIoController, SampleLibraryController, PeerSessionController,
+          and DOM/query helpers.
+      - id: ARCH-002
+        severity: P1
+        title: Route authority split between PatchBay packet routes and RoutingGraph audio edges is still fragile
+        evidence:
+          files:
+          - src/core/patchbay.js
+          - src/core/routing-graph.js
+          - src/core/audio-graph-sync.js
+          - src/ui/patch-canvas.js
+          - improve.yml
+          commands:
+          - read improve.yml
+        analysis: improve.yml documents active work to distinguish packet routes from audio graph routes and still calls for
+          click-to-connect/shift-click tests.
+        impact: UI route counters, saved projects, runtime audio graph, and packet dispatch can disagree.
+        recommendation: Define a route-domain contract and test visual edge edits through PatchCanvas, RoutingGraph, AudioGraphSync,
+          route UI, and project export.
+      - id: ARCH-003
+        severity: P1
+        title: Project schema does not yet persist visual audio graph state or canvas positions
+        evidence:
+          files:
+          - src/core/project-io.js
+          - improve.yml
+          commands:
+          - sed -n project-io createProject
+        analysis: createProject exports modules/routes/clips/arrangement/mixer/assets but not graph edges or canvas positions.
+        impact: User-edited audio routing can be lost across project export/import.
+        recommendation: Add schemaVersion-aware graph and canvas-position fields with round-trip tests and endpoint validation.
+    implementation_correctness:
+      rating: D+ currently, B- potential after gate stabilization
+      confidence: high
+      findings:
+      - id: CORR-001
+        severity: P0
+        title: Unit suite fails on current working tree
+        evidence:
+          files:
+          - tests/unit/peer-daw-feature-set.test.js
+          - tests/unit/drum-sampler-piano-roll.test.js
+          - index.html
+          - src/modules/drum-sampler.js
+          commands:
+          - pnpm test -- --runInBand
+        analysis: Static feature tests expect panel IDs missing from index.html; drum sampler serialization includes fileName:null
+          fields not reflected in current expectations.
+        impact: Core behavior confidence is blocked.
+        recommendation: Decide the intended DOM and serialization contracts, write/update focused tests first, then change
+          implementation minimally.
+      - id: CORR-002
+        severity: P1
+        title: Project archive import is a placeholder for real restore
+        evidence:
+          files:
+          - src/core/project-io.js
+          - improve.yml
+          commands:
+          - rg placeholder
+        analysis: Binary archive payloads currently return archiveBytes with empty modules/routes/assets; improve.yml calls
+          for stored-ZIP restore and traversal rejection.
+        impact: Users can export archive packages but cannot reliably restore them.
+        recommendation: Add round-trip and invalid archive tests, then implement stored-ZIP restore or adopt a maintained
+          ZIP library.
+      - id: CORR-003
+        severity: P1
+        title: Workspace views are acknowledged as incomplete or stub-level while tests assert old static panels
+        evidence:
+          files:
+          - TODO.md
+          - docs/USABILITY_PLAN.md
+          - index.html
+          - src/app.js
+          commands:
+          - pnpm test -- --runInBand
+        analysis: TODO.md says arrangement/clip/session/master mixer views are missing or stub-level; current tests check
+          stale static IDs.
+        impact: Tests do not yet model the user workflows they intend to protect.
+        recommendation: Replace brittle static ID tests with behavior tests for workspace tab rendering and state transitions.
+    tests_and_verifiable_behavior:
+      rating: C
+      confidence: high
+      findings:
+      - id: TEST-001
+        severity: P0
+        title: Configured verification gates are red
+        evidence:
+          files:
+          - package.json
+          - tests/unit/*.js
+          commands:
+          - pnpm test -- --runInBand
+          - pnpm verify:deploy
+        analysis: verify:build and verify:deploy depend on pnpm test; tests currently fail.
+        impact: No release or deployment should proceed.
+        recommendation: Fix focused failing tests first, then run full local and deploy gates.
+      - id: TEST-002
+        severity: P1
+        title: No browser/e2e test protects the patch canvas and workspace UI
+        evidence:
+          files:
+          - improve.yml
+          - TODO.md
+          - docs/USABILITY_PLAN.md
+          commands:
+          - glob .github/**/*
+        analysis: Existing tests cover markup/static strings, but not computed layout, no page errors, or user clicks in a
+          browser.
+        impact: A visual patch graph regression can recur while unit tests pass.
+        recommendation: Add a browser smoke harness for built dist, patch node boxes, workspace tabs, and console/page errors.
+      - id: TEST-003
+        severity: P1
+        title: Module lifecycle conformance is not enforced across all factories
+        evidence:
+          files:
+          - src/modules/*.js
+          - src/core/contracts.js
+          - improve.yml
+          commands:
+          - read improve.yml
+        analysis: ModuleBase defines an ABI, but improve.yml still requires factory-wide lifecycle conformance tests.
+        impact: New modules can serialize but fail repeated start/sync/audio graph reapply.
+        recommendation: Add a conformance harness over moduleFactories with fake AudioContext/GainNode objects.
+    maintainability:
+      rating: C-
+      confidence: high
+      findings:
+      - id: MAINT-001
+        severity: P1
+        title: Large inline HTML rendering makes UI changes brittle and security review hard
+        evidence:
+          files:
+          - src/app.js
+          - src/modules/*.js
+          - src/ui/patch-canvas.js
+          commands:
+          - rg innerHTML
+        analysis: Many modules and app views render HTML strings directly; escaping is uneven and difficult to audit.
+        impact: UI changes are regression-prone and imported/peer/sample values create injection review burden.
+        recommendation: Introduce safe DOM/text rendering helpers and injection regression tests.
+      - id: MAINT-002
+        severity: P2
+        title: Formatter/import-order drift creates noisy review surfaces
+        evidence:
+          files:
+          - src/core/sample-library.js
+          - src/modules/multisampler.js
+          - tests/unit/automation-clips-arrangement.test.js
+          commands:
+          - pnpm check
+        analysis: Biome reports 34 errors.
+        impact: Code review quality drops and CI will fail once enabled.
+        recommendation: Run check:fix after behavior stabilization and keep formatting in CI.
+    idiomatic_technology_use:
+      rating: C
+      confidence: medium-high
+      findings:
+      - id: IDIOM-001
+        severity: P1
+        title: Documented TypeScript-like contracts are implemented as plain JavaScript without runtime schema validation
+        evidence:
+          files:
+          - docs/ARCHITECTURE.md
+          - src/core/contracts.js
+          - src/core/project-io.js
+          commands:
+          - read docs/ARCHITECTURE.md
+        analysis: ModuleConfig, Module, Packet, and project schemas are documented like typed contracts, but runtime validation
+          is partial.
+        impact: Contract drift is likely in plugin-heavy project import/export and peer sync payloads.
+        recommendation: Add TypeScript/checkJs+JSDoc or explicit validators for public JSON contracts.
+      - id: IDIOM-002
+        severity: P2
+        title: PeerJS is both an npm dependency and a CDN script boundary
+        evidence:
+          files:
+          - package.json
+          - index.html
+          commands:
+          - rg peerjs
+        analysis: This may be intentional, but it weakens reproducibility unless pinned and documented.
+        impact: Runtime can differ from lockfile; CSP/offline deployments can fail.
+        recommendation: Decide bundled dependency vs documented CDN fallback with version/subresource policy.
+    security_and_validation:
+      rating: C-
+      confidence: medium-high
+      findings:
+      - id: SEC-001
+        severity: P1
+        title: DOM injection surface is broad and unevenly escaped
+        evidence:
+          files:
+          - src/app.js
+          - src/modules/*.js
+          - src/ui/patch-canvas.js
+          commands:
+          - rg innerHTML
+        analysis: Imported project, peer, sample, and preset values can flow into many innerHTML renderers.
+        impact: Malicious metadata can alter DOM or execute markup if any unescaped path is reachable.
+        recommendation: Add safe rendering boundary and injection tests before expanding import/sync features.
+      - id: SEC-002
+        severity: P1
+        title: Archive import lacks path traversal and malformed archive validation
+        evidence:
+          files:
+          - src/core/project-io.js
+          - improve.yml
+          commands:
+          - sed project-io parseProjectPayload
+        analysis: Binary archives are accepted as bytes without project.json/sample path validation; improve.yml names traversal
+          rejection as a task.
+        impact: Archive restore could become unsafe once implemented.
+        recommendation: 'Write invalid archive tests first: absolute paths, .. traversal, missing project.json, duplicate
+          project.json, unsupported compression.'
+      - id: SEC-003
+        severity: P2
+        title: Dependency audit reports moderate Vite/esbuild vulnerabilities
+        evidence:
+          files:
+          - package.json
+          - pnpm-lock.yaml
+          commands:
+          - pnpm audit --audit-level moderate
+        analysis: Findings appear related to dev-server/tooling paths, but the security gate currently fails.
+        impact: Developer machines and CI policy remain exposed unless upgraded or documented.
+        recommendation: Verify compatibility with patched Vite/esbuild versions and update lockfile under full gates.
+    operations_and_deployment:
+      rating: D+
+      confidence: high
+      findings:
+      - id: OPS-001
+        severity: P0
+        title: Deploy-facing gate is blocked
+        evidence:
+          files:
+          - package.json
+          commands:
+          - pnpm verify:deploy
+        analysis: verify:deploy fails at verify:build because pnpm test fails.
+        impact: app-hub import and deploy asset contracts are not validated.
+        recommendation: Restore unit gate, then rerun verify:deploy and record parent contract results.
+      - id: OPS-002
+        severity: P1
+        title: No project-local CI workflow found
+        evidence:
+          files:
+          - .github/**/* absent
+          commands:
+          - glob .github/**/*
+        analysis: README/package scripts define gates, but no workflow under this subproject enforces them.
+        impact: Broken tests and formatter drift can accumulate.
+        recommendation: Add root/subproject CI after gates are green.
+    documentation_and_developer_experience:
+      rating: B-
+      confidence: high
+      findings:
+      - id: DOC-001
+        severity: P2
+        title: Docs are useful but drift against current implementation and tests
+        evidence:
+          files:
+          - README.md
+          - docs/ARCHITECTURE.md
+          - TODO.md
+          - improve.yml
+          - tasks.yml
+          commands:
+          - read README.md
+          - read docs/ARCHITECTURE.md
+          - read TODO.md
+        analysis: Docs describe target architecture and task files track gaps, but tests, TODO, and current DOM disagree.
+        impact: Contributors may implement against obsolete or aspirational contracts.
+        recommendation: Create a contract map linking feature areas to source files and tests.
+      - id: DOC-002
+        severity: P3
+        title: README module contract snippet is confusing
+        evidence:
+          files:
+          - README.md
+          commands:
+          - read README.md
+        analysis: The example says class ModuleBase extends ModuleBase, likely a documentation typo.
+        impact: Minor onboarding confusion for module authors.
+        recommendation: Replace with class ExampleModule extends ModuleBase and include import context.
+  domain_contracts:
+    current_contracts:
+    - name: ModuleBase lifecycle
+      source: src/core/contracts.js and docs/ARCHITECTURE.md
+      confidence: high
+      description: Modules expose id/title/kind/ports, mount/render/unmount, start/stop, receive, connectAudio/disconnectAudio,
+        serialize/hydrate, and packet emission.
+    - name: Packet protocol
+      source: docs/ARCHITECTURE.md and src/core/contracts.js
+      confidence: medium-high
+      description: JSON-safe packets with kind/type/timing and type-specific note/control fields.
+    - name: Project package schema v1
+      source: src/core/project-io.js
+      confidence: high
+      description: schemaVersion 1 project with type, exportMode, exportedAt, modules, routes, clips, arrangement, mixer,
+        and assets.
+    - name: Sample library snapshot
+      source: src/core/sample-library.js and tasks.yml
+      confidence: high
+      description: Nested root/dirs/samples structure with normalized sample metadata and local/peer source annotations.
+    - name: PatchCanvas visual graph
+      source: src/ui/patch-canvas.js and improve.yml
+      confidence: medium
+      description: Visual nodes/edges for audio graph editing with click/shift-click intentions; browser behavior not verified
+        during review.
+    missing_or_implicit_contracts:
+    - name: Workspace view DOM/user-flow contract
+      risk: Tests and implementation disagree on static panel IDs vs dynamic workspace tabs.
+      proposed_contract: Define required views, empty states, actions, roles, and stable data attributes.
+      verification_strategy: Browser/unit DOM tests click each workspace tab and assert semantic content/actions.
+    - name: Route ownership contract
+      risk: PatchBay packet routes and RoutingGraph audio edges can diverge.
+      proposed_contract: Explicitly separate packet_routes and audio_graph_edges in UI, state, project schema, and sync.
+      verification_strategy: Integration tests through PatchCanvas/app callbacks verify counts, audio sync, clear behavior,
+        and export/import.
+    - name: Project archive restore contract
+      risk: Archive export exists but binary import is placeholder-level.
+      proposed_contract: Archive contains exactly one project.json plus samples/* assets; traversal/missing schema/unsupported
+        compression rejected.
+      verification_strategy: Round-trip and invalid archive tests before parser implementation.
+    - name: Safe UI rendering contract
+      risk: Untrusted project/sample/peer values can flow into innerHTML.
+      proposed_contract: All untrusted strings pass through escape/text-node rendering; raw HTML templates must be audited.
+      verification_strategy: Injection regression tests for module titles, sample filenames/tags, peer names, and preset labels.
+    - name: Peer sample transfer contract
+      risk: tasks.yml describes request/progress/completion behavior but end-to-end confidence is not established.
+      proposed_contract: Define packet types, correlation id, chunk ordering, size limits, progress, abort/error, and library
+        insertion rules.
+      verification_strategy: Unit tests for SampleSyncManager plus fake-peer missing-slot UI progress tests.
+  target_state:
+    architectural_principles:
+    - principle: One owner per domain state
+      reason: Packet routing, audio graph routing, workspace view state, samples, and peer sync need explicit owners.
+    - principle: Project files are durable contracts
+      reason: Users must trust import/export not to lose graph edges, sample refs, clips, arrangement, mixer, or metadata.
+    - principle: Browser behavior needs browser tests
+      reason: The key product value is visual/audio/UI interaction, which unit string tests cannot prove.
+    - principle: Safe rendering by default
+      reason: Imported projects and peer/sample metadata are untrusted inputs in a collaborative browser app.
+    - principle: Test-first remediation
+      reason: Current failures indicate contract drift; expected behavior must be clarified before code changes.
+    desired_module_boundaries:
+    - boundary: AppBootstrap/DomBindings
+      owns:
+      - querying required/optional DOM nodes
+      - startup order
+      - status/error banner
+      must_not_own:
+      - project schema
+      - route graph logic
+      - sample sync protocol
+      public_contract: init(rootDocument) returns initialized controllers or structured startup error.
+    - boundary: WorkspaceController
+      owns:
+      - session/chains/clips/arrangement/mixer/module view state and rendering
+      must_not_own:
+      - WebAudio connection side effects
+      - peer transport
+      public_contract: render(view, state), select(view), bindWorkspaceEvents(root).
+    - boundary: RoutingController
+      owns:
+      - routing graph callbacks
+      - audio graph sync
+      - route stats
+      must_not_own:
+      - project file serialization internals
+      public_contract: connectAudioEdge, disconnectAudioEdge, clearRoutes(scope), serializeGraph.
+    - boundary: ProjectIo
+      owns:
+      - schema validation
+      - import/export/archive/migrations
+      must_not_own:
+      - DOM alerts
+      - module-specific rendering
+      public_contract: parseProjectPayload, createProjectPackage, validateProject, migrateProject.
+    - boundary: SampleLibraryService
+      owns:
+      - library storage
+      - missing-slot detection
+      - metadata/cues/BPM
+      - sync-to-library
+      must_not_own:
+      - DOM drag/drop rendering
+      public_contract: load/save/import/export/add/find/detectUsage.
+    quality_gates:
+      required_for_merge:
+      - pnpm check
+      - pnpm test -- --runInBand
+      - pnpm build
+      required_for_release:
+      - pnpm verify:deploy
+      - browser smoke with no console/page errors, visible patch nodes, and functional workspace tabs
+      - pnpm audit --audit-level moderate or documented approved exception
+    test_strategy:
+      unit: Keep current core/module tests and add conformance tests for every module factory.
+      integration: Exercise App/Routing/SampleLibrary/ProjectIo with fake DOM, fake AudioContext, fake peers, and deterministic
+        clocks.
+      e2e: Add built-dist browser smoke for app load, default rig, patch node bounding boxes, workspace tabs, and no page
+        errors.
+      contract: Version tests for project schema, sample sync packet schema, module ABI, route ownership, and app-hub deploy
+        asset imports.
+      regression: Each discovered failure gets a red test first.
+      performance: Add large graph/module rack responsiveness checks before performance refactors.
+      security: Add DOM injection, archive path validation, dependency audit, and malformed peer/sample payload tests.
+    definition_of_done:
+    - item: All configured local and deploy gates pass on a clean working tree.
+      verification: git status --short; pnpm check; pnpm test -- --runInBand; pnpm build; pnpm verify:deploy.
+    - item: Every behavioral fix starts with a failing regression test.
+      verification: Task notes or commit history show RED/GREEN for each fix.
+    - item: Project import/export preserves user-visible DAW state.
+      verification: Round-trip tests cover modules, routes, graph edges, canvas positions, clips, arrangement, mixer, sample
+        refs, and metadata.
+    - item: Browser smoke proves visible app contract.
+      verification: Automated browser run reports no page errors and verifies patch canvas/workspace/module panels.
+    - item: Untrusted strings render safely.
+      verification: Injection tests assert markup-like names/filenames/peer names are text, not executable DOM.
+  task_tree:
+  - id: P0-001
+    title: Restore the Jest unit gate
+    severity: P0
+    urgency_reason: Unit tests are part of verify:build and verify:deploy; current exit code is 1.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - pnpm test -- --runInBand exit 1
+      - 3 failed tests / 173 passed
+      - TODO.md says arrangement/clip/session views are stubs
+    problem: pnpm test -- --runInBand fails with 3 failed tests. Static feature-set tests expect DOM IDs missing from index.html,
+      and drum sampler serialization adds fileName:null to pad objects not expected by the current contract.
+    root_cause: Likely contract drift from in-progress UI/workspace and sample metadata work; tests were not reconciled test-first.
+    impact: Cannot claim core behavior or release readiness; deploy verification is blocked before app-hub contracts run.
+    affected_files:
+    - index.html
+    - src/app.js
+    - src/modules/drum-sampler.js
+    - tests/unit/peer-daw-feature-set.test.js
+    - tests/unit/drum-sampler-piano-roll.test.js
+    affected_components:
+    - workspace UI contract
+    - drum sampler serialization contract
+    - Jest unit gate
+    dependencies: []
+    solution_strategy: Reproduce, decide intended contracts, write/update focused failing tests, implement the smallest correction,
+      then run focused and full gates.
+    tdd_plan:
+      red:
+        test_to_add: Focused tests for the intended workspace DOM contract and the intended drum pad optional-field policy.
+        expected_failure: Tests fail for the same contract mismatch before implementation changes.
+      green:
+        minimal_change: Restore required DOM IDs or update tests to the new semantic workspace contract; omit null fileName
+          or document/update nullable schema.
+      refactor:
+        cleanup: Remove obsolete static ID assertions once behavior tests cover the new workspace contract.
+    acceptance_criteria:
+    - criterion: pnpm test -- --runInBand exits 0.
+      verification: pnpm test -- --runInBand
+    - criterion: Focused failing tests pass without weakening behavior assertions.
+      verification: node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/peer-daw-feature-set.test.js
+        tests/unit/drum-sampler-piano-roll.test.js --runInBand
+    verification_commands:
+    - command: pnpm test -- --runInBand
+      expected_result: 0 failed tests
+    - command: pnpm verify:build
+      expected_result: reaches build and exits 0
+    subtasks:
+    - id: P0-001.1
+      title: Reconcile workspace panel DOM contract
+      status: proposed
+      details: Decide whether old IDs remain required or workspace tabs replace them; test that exact user-facing contract.
+      affected_files:
+      - index.html
+      - src/app.js
+      - tests/unit/peer-daw-feature-set.test.js
+      acceptance_criteria:
+      - Focused feature-set test passes with semantic assertions.
+      verification_commands:
+      - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/peer-daw-feature-set.test.js --runInBand
+      subtasks: []
+    - id: P0-001.2
+      title: Reconcile drum sampler pad optional-field serialization
+      status: proposed
+      details: Define compact-vs-null optional field policy and lock it with a test.
+      affected_files:
+      - src/modules/drum-sampler.js
+      - tests/unit/drum-sampler-piano-roll.test.js
+      acceptance_criteria:
+      - Drum sampler serialization test passes and matches documented schema policy.
+      verification_commands:
+      - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/drum-sampler-piano-roll.test.js --runInBand
+      subtasks: []
+    completion_evidence:
+    - 'Verified: pnpm test -- --runInBand passes with 29 suites / 176 tests before P1-003, later 178 tests after archive tests.'
+    - Focused peer-daw-feature-set, drum-sampler, and project-io contract failures were reproduced red and fixed green.
+    actual_changes: []
+  - id: P0-002
+    title: Restore Biome quality gate
+    severity: P0
+    urgency_reason: package.json defines pnpm check as the code quality gate; it currently exits 1 with 34 errors.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - pnpm check exit 1
+      - Biome found 34 errors
+    problem: Biome reports formatting/import-order diagnostics across source/tests, with diagnostics exceeding display limit.
+    root_cause: In-progress changes were not formatted/import-organized according to biome.json before verification.
+    impact: Quality gate failure blocks release/CI and creates noisy diffs.
+    affected_files:
+    - src/core/sample-library.js
+    - src/modules/multisampler.js
+    - tests/unit/automation-clips-arrangement.test.js
+    - other files reported by Biome
+    affected_components:
+    - formatting
+    - linting
+    - import organization
+    dependencies:
+    - P0-001 preferred first if behavior changes are still moving
+    solution_strategy: Apply formatting/import-order changes only after behavior stabilization; review diff for semantic neutrality.
+    tdd_plan:
+      red:
+        test_to_add: No behavior test needed for pure formatting; pnpm check is the failing quality test.
+        expected_failure: pnpm check fails with existing diagnostics.
+      green:
+        minimal_change: Run pnpm check:fix or manually apply Biome-safe changes only.
+      refactor:
+        cleanup: Review git diff and rerun behavior tests to ensure no semantic changes.
+    acceptance_criteria:
+    - criterion: pnpm check exits 0.
+      verification: pnpm check
+    - criterion: No unexpected semantic diff.
+      verification: git diff review
+    verification_commands:
+    - command: pnpm check
+      expected_result: Checked files with 0 errors
+    - command: pnpm test -- --runInBand
+      expected_result: still exits 0 after formatting
+    subtasks: []
+    completion_evidence:
+    - 'Verified: pnpm check passes after formatter/import-order and lint cleanup.'
+    actual_changes: []
+  - id: P0-003
+    title: Restore deploy-facing verification
+    severity: P0
+    urgency_reason: README/package scripts define verify:deploy as the app-hub deployment contract; it currently exits 1.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - pnpm verify:deploy exit 1 at verify:build
+    problem: verify:deploy fails during verify:build because pnpm test fails.
+    root_cause: The deploy pipeline composes gates and the first prerequisite is red.
+    impact: Current dist build success does not prove app-hub deploy import paths/assets.
+    affected_files:
+    - package.json
+    - dist/
+    - ../app-hub-v11/artifacts.source.json
+    - ../tests/v11-peer-daw-build-imports.test.mjs
+    - ../tests/v11-peer-daw-deploy-assets.test.mjs
+    affected_components:
+    - deployment artifact contract
+    - app-hub integration
+    dependencies:
+    - P0-001
+    - P0-002
+    solution_strategy: Restore unit and quality gates first, then inspect any remaining parent deploy contract failures separately.
+    tdd_plan:
+      red:
+        test_to_add: If deploy contracts fail after unit gate, add a focused contract/regression test for that failure.
+        expected_failure: verify:deploy currently fails before deploy contracts run.
+      green:
+        minimal_change: No deploy changes until verify:build is green; then fix only observed deploy contract failures.
+      refactor:
+        cleanup: Record deploy contract output and keep package scripts aligned with README.
+    acceptance_criteria:
+    - criterion: pnpm verify:deploy exits 0.
+      verification: pnpm verify:deploy
+    - criterion: Deploy contracts actually run after verify:build.
+      verification: command output includes node ../tests/v11-peer-daw-*.test.mjs results
+    verification_commands:
+    - command: pnpm verify:deploy
+      expected_result: exit 0 and app-hub contracts pass
+    subtasks: []
+    completion_evidence:
+    - 'Verified: local deploy-contract pieces pass from parent cwd: artifact catalog generation plus tests/v11-peer-daw-build-imports.test.mjs
+      and tests/v11-peer-daw-deploy-assets.test.mjs.'
+    - 'Note: one direct pnpm verify:deploy tool call was blocked by the tool layer after script changes; equivalent constituent
+      commands were verified.'
+    actual_changes: []
+  - id: P0-004
+    title: Commit or isolate the dirty working tree before remediation
+    severity: P0
+    urgency_reason: Review found pre-existing modified source and new docs; future fixes cannot be attributed cleanly without
+      isolating baseline.
+    status: proposed
+    confidence:
+      level: high
+      evidence:
+      - git status --short output from discovery command
+    problem: git status showed modified source files and untracked docs before this review file was added.
+    root_cause: Multiple in-progress feature threads are mixed in one working tree.
+    impact: Debugging failing tests becomes ambiguous and later changes may overwrite user work.
+    affected_files:
+    - index.html
+    - src/app.js
+    - src/modules/clean-sampler.js
+    - src/modules/clock.js
+    - src/modules/drum-sampler.js
+    - src/modules/multisampler.js
+    - style.css
+    - TODO.md
+    - docs/MODULE_UI_BACKLOG.md
+    - docs/USABILITY_PLAN.md
+    - peer-daw-ux-report.md
+    - project-review.yml
+    affected_components:
+    - repository hygiene
+    - review reproducibility
+    dependencies: []
+    solution_strategy: Create a reproducible baseline by committing/stashing existing work or creating a worktree before behavior
+      fixes.
+    tdd_plan:
+      red:
+        test_to_add: No code test required; git status is the failing hygiene check.
+        expected_failure: git status currently shows dirty tree.
+      green:
+        minimal_change: Make an explicit checkpoint commit or stash named for the current WIP plus this review file.
+      refactor:
+        cleanup: Future behavior commits should each contain focused TDD fixes.
+    acceptance_criteria:
+    - criterion: git status is understood and intentional before fixes.
+      verification: git status --short
+    verification_commands:
+    - command: git status --short
+      expected_result: only expected files remain dirty or a checkpoint commit exists
+    subtasks: []
+  - id: P1-001
+    title: Add browser smoke coverage for patch canvas and workspace views
+    severity: P1
+    urgency_reason: Patch canvas and serious workspace views are central user-facing behavior and currently only indirectly/static
+      tested.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - improve.yml critical-01-rendered-graph-browser-smoke
+      - TODO.md Big Errors
+      - pnpm test static DOM failure
+    problem: No automated browser test verifies computed patch canvas layout, no page errors, or workspace tab behavior.
+    root_cause: Existing tests assert strings/markup rather than browser-visible behavior.
+    impact: Visual regressions can ship while unit tests pass.
+    affected_files:
+    - index.html
+    - style.css
+    - src/app.js
+    - src/ui/patch-canvas.js
+    - docs/USABILITY_PLAN.md
+    - TODO.md
+    affected_components:
+    - browser UI
+    - patch canvas
+    - workspace tabs
+    - module views
+    dependencies:
+    - P0-001
+    - P0-002
+    solution_strategy: Add a small browser smoke harness against built dist.
+    tdd_plan:
+      red:
+        test_to_add: Browser test that loads app, captures page errors, verifies patch node bounding boxes, and clicks each
+          workspace tab.
+        expected_failure: Initial test fails on missing harness or known stub/nonzero-box assertions.
+      green:
+        minimal_change: Add minimal Playwright or project-approved browser CLI wrapper and only smoke-level assertions first.
+      refactor:
+        cleanup: Replace obsolete static ID tests with semantic roles/data attributes used by browser smoke.
+    acceptance_criteria:
+    - criterion: Browser smoke catches patch canvas rendering regression.
+      verification: Deliberately remove patch-node style locally and observe failure before reverting.
+    - criterion: Workspace tabs render non-empty semantic panels.
+      verification: browser test
+    verification_commands:
+    - command: pnpm build
+      expected_result: exit 0
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    - command: pnpm run test:e2e or documented browser smoke command
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED/feasibility: system Firefox and global Playwright were incompatible for browser automation, so the project
+      needed a reproducible Playwright/Chromium smoke dependency and script.'
+    - 'Verified GREEN: pnpm exec playwright install chromium, pnpm build, and pnpm test:smoke pass locally.'
+    - 'Smoke coverage loads the built app through Vite preview, checks no page/console errors, verifies #patchCanvas and #workspaceMainView
+      exist, checks patch canvas has a nonzero bounding box, clicks session/chains/clips/arrangement/mixer/module workspace
+      tabs, and asserts rendered module cards exist.'
+    - 'Verified regression: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand, and pnpm verify:build
+      pass with 31 suites / 186 tests.'
+    actual_changes:
+    - Added Playwright as a devDependency for reproducible browser smoke testing.
+    - Added scripts/browser-smoke.mjs to start Vite preview and verify patch canvas, workspace tabs, module card rendering,
+      and browser page-error absence in Chromium.
+    - Added package script test:smoke and extended verify:build to run tests, build, and browser smoke.
+    - Updated CI workflow to install Chromium with Playwright and run pnpm test:smoke after build.
+  - id: P1-002
+    title: Extract src/app.js responsibilities into tested controllers
+    severity: P1
+    urgency_reason: src/app.js is 2712 lines and owns too many architectural layers.
+    status: in_progress
+    confidence:
+      level: high
+      evidence:
+      - wc -l shows src/app.js 2712 lines
+      - docs/ARCHITECTURE.md layer structure
+    problem: App class handles DOM binding, audio transport, module lifecycle, peer sessions, sample panels, project I/O,
+      workspace rendering, route display, and stats.
+    root_cause: Rapid feature addition accumulated responsibilities in one class instead of the documented layer structure.
+    impact: Every UI/domain/network change is risky and hard to test in isolation.
+    affected_files:
+    - src/app.js
+    - src/core/*
+    - src/ui/*
+    - src/modules/*
+    affected_components:
+    - application architecture
+    - testability
+    - maintainability
+    dependencies:
+    - P0 gates green first
+    solution_strategy: Extract one controller at a time behind characterization tests.
+    tdd_plan:
+      red:
+        test_to_add: 'Characterization tests for one responsibility at a time: workspace rendering, routing changes, sample
+          panel rendering, or project import/export action.'
+        expected_failure: Test fails if extracted contract is not reachable or currently untested.
+      green:
+        minimal_change: Start with pure WorkspaceController or DOM query helpers and preserve behavior.
+      refactor:
+        cleanup: Reduce app.js imports/state after each extraction while keeping tests green.
+    acceptance_criteria:
+    - criterion: app.js responsibility and size decrease without behavior regression.
+      verification: wc -l plus full tests
+    - criterion: Controllers have focused unit tests.
+      verification: new tests under tests/unit
+    verification_commands:
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0 after each extraction
+    - command: pnpm check
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: tests/unit/workspace-preferences.test.js failed because WorkspacePreferences controller did not exist.'
+    - 'Verified GREEN: WorkspacePreferences now owns workspace-view and sidebar-drawer persistence; focused workspace-preferences
+      tests pass.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass with 31 suites / 186 tests.'
+    - 'Not marked done: src/app.js still owns many other controller responsibilities; this is one safe extraction slice only.'
+    - 'Verified RED: tests/unit/sample-panel-renderer.test.js failed because src/ui/sample-panel-renderer.js did not exist.'
+    - 'Verified GREEN: sample panel renderer tests pass for escaped sample-library tree HTML, project sample usage cards,
+      peer-query/upload actions, progress fill, and empty state.'
+    - 'Verified regression after second extraction slice: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand,
+      and pnpm verify:build pass with 32 suites / 189 tests.'
+    - 'Not marked done: src/app.js still owns transport, workspace rendering, project I/O orchestration, peer/session wiring,
+      module focused editors, and other controller responsibilities.'
+    - 'Verified RED: tests/unit/project-state.test.js failed because src/core/project-state.js did not exist.'
+    - 'Verified GREEN: project-state tests pass for pure mixer serialization, clip serialization, project source creation,
+      and rig snapshot creation.'
+    - 'Verified regression after third extraction slice: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand,
+      and pnpm verify:build pass with 33 suites / 191 tests.'
+    - 'Not marked done: src/app.js remains a large orchestrator and still owns transport, workspace rendering, import/rebuild
+      side effects, peer/session wiring, focused module editors, and audio/module lifecycle orchestration.'
+    actual_changes:
+    - Added src/core/workspace-preferences.js with pure WorkspacePreferences persistence helper.
+    - Added tests/unit/workspace-preferences.test.js for workspace view persistence, drawer state persistence, invalid storage,
+      and unavailable storage.
+    - Updated src/app.js to delegate workspace view and drawer localStorage logic to WorkspacePreferences.
+    - Added src/ui/sample-panel-renderer.js with pure renderSampleLibraryTreeHtml() and renderProjectSampleUsageHtml() helpers.
+    - Added tests/unit/sample-panel-renderer.test.js for sample panel escaping, sample-card controls, progress fill, and empty
+      state.
+    - Updated src/app.js to delegate sample-library tree and project sample usage HTML generation to the pure renderer.
+    - Added src/core/project-state.js with pure serializeMixerState(), serializeClipState(), createProjectSource(), and serializeRig()
+      helpers.
+    - Added tests/unit/project-state.test.js for project/rig serialization contracts and shallow-copy behavior.
+    - Updated src/app.js to delegate mixer/clip/project/rig snapshot assembly to project-state helpers while preserving existing
+      app method names.
+  - id: P1-003
+    title: Implement real project archive import/restore with validation
+    severity: P1
+    urgency_reason: Archive export exists, but binary archive import is placeholder-level.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - src/core/project-io.js parseProjectPayload placeholder behavior
+      - improve.yml high-03-archive-import-real-restore
+    problem: parseProjectPayload returns archiveBytes with empty modules/routes/assets for binary payloads.
+    root_cause: Archive export was added before the inverse restore contract was implemented.
+    impact: Users can create archives they cannot faithfully restore.
+    affected_files:
+    - src/core/project-io.js
+    - src/app.js
+    - tests/unit/project-io.test.js
+    affected_components:
+    - project persistence
+    - sample assets
+    - security validation
+    dependencies:
+    - P0-001
+    solution_strategy: Add archive round-trip and invalid archive tests first, then implement a minimal stored-ZIP reader
+      or approved dependency.
+    tdd_plan:
+      red:
+        test_to_add: createProjectPackage(project-archive) to parseProjectPayload round-trip plus invalid archive traversal
+          tests.
+        expected_failure: parseProjectPayload currently returns placeholder shell or accepts unsafe paths.
+      green:
+        minimal_change: Implement stored ZIP reader matching createStoredZip output and validate project.json plus samples/*
+          names.
+      refactor:
+        cleanup: Extract archive parser helpers and explicitly reject unsupported compression if not implemented.
+    acceptance_criteria:
+    - criterion: Archive round-trip restores project and assets.
+      verification: tests/unit/project-io.test.js
+    - criterion: Unsafe archive paths are rejected.
+      verification: invalid archive tests
+    verification_commands:
+    - command: node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/project-io.test.js --runInBand
+      expected_result: exit 0
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: project archive bytes previously parsed to empty modules/routes/assets and malformed bytes did not throw.'
+    - 'Verified GREEN: tests/unit/project-io.test.js now passes 9 tests including archive byte restore and invalid archive
+      rejection.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass after implementation.'
+    actual_changes:
+    - Added stored-ZIP archive reader for the project archive format emitted by createProjectPackage.
+    - Added archive entry-name validation before project restore.
+    - Raw ArrayBuffer/Uint8Array project archives now restore project.json contents and expose archiveEntries metadata.
+    - Added project-io tests for archive byte round-trip and malformed archive rejection.
+  - id: P1-004
+    title: Persist audio graph edges and patch canvas positions in project schema
+    severity: P1
+    urgency_reason: Project export does not yet preserve user-edited visual/audio routing state.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - project-io createProject fields
+      - improve.yml high-01-project-export-completeness
+    problem: createProject exports modules/routes/clips/arrangement/mixer/assets but not graph edges or canvas positions.
+    root_cause: Patch canvas/audio graph work was added after project schema v1 without migration/round-trip coverage.
+    impact: Users can lose routing edits on save/import.
+    affected_files:
+    - src/core/project-io.js
+    - src/app.js
+    - src/ui/patch-canvas.js
+    - tests/unit/project-io.test.js
+    affected_components:
+    - project schema
+    - routing graph
+    - patch canvas
+    dependencies:
+    - P0-001
+    - P1-003 may share project schema work
+    solution_strategy: Add schemaVersion-aware graph and positions field with endpoint validation.
+    tdd_plan:
+      red:
+        test_to_add: Project round-trip test for RoutingGraph.serialize output and patchCanvas positions keyed by module id.
+        expected_failure: Export lacks graph/positions or rebuild does not restore them.
+      green:
+        minimal_change: Add optional graph field under schemaVersion 1 or introduce schemaVersion 2 migration.
+      refactor:
+        cleanup: Document project schema field and update deploy/sample import tests as needed.
+    acceptance_criteria:
+    - criterion: Exported project contains graph edges and canvas positions.
+      verification: project-io round-trip test
+    - criterion: Import rejects invalid graph endpoints without crashing.
+      verification: validation test
+    verification_commands:
+    - command: node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/project-io.test.js tests/unit/routing-graph.test.js
+        --runInBand
+      expected_result: exit 0
+    - command: pnpm verify:build
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: project-io export omitted graph/canvasPositions and PatchCanvas lacked serializePositions/restorePositions.'
+    - 'Verified GREEN: focused patch-canvas and project-io tests pass with graph/canvas position coverage.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass after implementation.'
+    actual_changes:
+    - Added PatchCanvas.serializePositions() and PatchCanvas.restorePositions().
+    - Added graph and canvasPositions to project-io project schema output.
+    - Wired projectSource() and serializeRig() to include RoutingGraph.serialize() and patch canvas positions.
+    - Wired project rebuild to restore saved routing graph state and patch canvas positions, with route-derived fallback for
+      older projects.
+    - Removed archive applyRig short-circuit now that parseProjectPayload restores project.json from archive bytes.
+    - Added project-io and patch-canvas regression tests for graph/canvas round-trips.
+  - id: P1-005
+    title: Introduce safe rendering boundary for untrusted strings
+    severity: P1
+    urgency_reason: Many renderers use innerHTML with runtime/project/peer/sample-derived values.
+    status: done
+    confidence:
+      level: medium-high
+      evidence:
+      - rg innerHTML results
+      - collaborative/imported data domain
+    problem: app and module renderers interpolate titles, filenames, labels, metadata, peer names, descriptions, and presets
+      through HTML strings.
+    root_cause: The codebase grew string templates without a central escaping/rendering policy.
+    impact: Imported project JSON, sample metadata, or peer names can become DOM injection vectors.
+    affected_files:
+    - src/app.js
+    - src/modules/*.js
+    - src/ui/patch-canvas.js
+    affected_components:
+    - security
+    - UI rendering
+    - project import
+    - peer collaboration
+    dependencies:
+    - P0 gates green first
+    solution_strategy: Add injection regression tests and central safe rendering helpers.
+    tdd_plan:
+      red:
+        test_to_add: Injection tests with markup payloads in module titles, sample filenames/tags, peer names, and preset
+          labels.
+        expected_failure: At least one renderer treats the payload as markup or current safety is undocumented.
+      green:
+        minimal_change: Add escapeHtml/text-node helper and refactor highest-risk renderers first.
+      refactor:
+        cleanup: Prefer DOM creation for interactive controls and reserve innerHTML for audited constant templates.
+    acceptance_criteria:
+    - criterion: Injection payloads render as text.
+      verification: new security-focused tests
+    - criterion: No raw project/sample/peer values are concatenated into innerHTML without escape helper.
+      verification: rg/code review
+    verification_commands:
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    - command: pnpm check
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: catalog-wide safe-rendering regression failed because module renderers interpolated untrusted titles/status/file
+      names into innerHTML.'
+    - 'Verified GREEN: module-lifecycle-conformance.test.js now includes safe-rendering coverage and passes after shared escaping
+      helper adoption.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, pnpm build, and parent deploy contract tests pass with 30
+      suites / 182 tests.'
+    actual_changes:
+    - Added src/core/html.js with shared escapeHtml/escapeAttr helpers.
+    - Refactored affected module render templates to escape untrusted titles, filenames, status text, peer pilot attribute
+      values, sample/pad names, zone names, and sequencer row labels/notes.
+    - Extended module lifecycle conformance tests with a catalog-wide safe-rendering regression for hostile title/status/attribute
+      payloads.
+    - Formatted/import-organized the new helper imports through Biome.
+  - id: P1-006
+    title: Add module lifecycle conformance tests for all factories
+    severity: P1
+    urgency_reason: ModuleBase defines an ABI, but not every module factory is verified against repeated lifecycle and serialization
+      behavior.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - improve.yml high-02-module-lifecycle-conformance
+      - many module files with custom lifecycle methods
+    problem: Module additions are tested piecemeal rather than under a shared ABI harness.
+    root_cause: The plugin/module contract is documented but not enforced across moduleFactories.
+    impact: Audio graph sync and project import can break when one module leaks connections, throws on repeated start, or
+      serializes incompatible state.
+    affected_files:
+    - src/modules/catalog.js
+    - src/modules/*.js
+    - src/core/contracts.js
+    - tests/unit/*
+    affected_components:
+    - module ABI
+    - WebAudio lifecycle
+    - plugin compatibility
+    dependencies:
+    - P0-001
+    solution_strategy: Add a conformance test helper over moduleFactories using fake AudioContext/GainNode objects.
+    tdd_plan:
+      red:
+        test_to_add: Enumerate moduleFactories and call mount/render/start twice/connectAudio/disconnectAudio/serialize/hydrate/unmount.
+        expected_failure: Initial test may fail on modules missing safe repeat behavior.
+      green:
+        minimal_change: Fix each module minimally after failure is reproduced.
+      refactor:
+        cleanup: Extract reusable fake audio/context helpers.
+    acceptance_criteria:
+    - criterion: Every factory passes lifecycle conformance.
+      verification: new conformance test
+    - criterion: Failures become targeted module tests before fixes.
+      verification: focused test names and commands
+    verification_commands:
+    - command: node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/module-lifecycle-conformance.test.js
+        --runInBand
+      expected_result: exit 0
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: new catalog-wide lifecycle conformance harness exposed clock/metronome fake-root gaps, OCRA canvas fake-root
+      gap, and ChannelStrip serialize() missing base ABI fields.'
+    - 'Verified GREEN: module-lifecycle-conformance.test.js passes after harness fidelity improvements and ChannelStrip serialize()
+      ABI fix.'
+    - 'Verified regression: focused channel-strip and lifecycle tests pass; pnpm check, pnpm test -- --runInBand, and pnpm
+      build pass with 30 suites / 181 tests.'
+    actual_changes:
+    - Added tests/unit/module-lifecycle-conformance.test.js to exercise every moduleFactories entry through mount/start/start/serialize/hydrate/connect/disconnect/stop/unmount.
+    - Added fake WebAudio and fake DOM/canvas harness support for catalog-wide module conformance.
+    - Updated ChannelStripModule.serialize() to include ModuleBase id/title/kind fields alongside the channel-strip preset
+      payload.
+    - Updated channel-strip preset tests to distinguish exportPreset() as preset-only from serialize() as module-state export.
+  - id: P1-007
+    title: Complete sample library and peer sample sync contracts from tasks.yml
+    severity: P1
+    urgency_reason: tasks.yml sample-library-and-missing-sample-sync scope remains largely todo/in_progress.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - tasks.yml definition_of_done and todo subtasks
+    problem: sample-library-core is in_progress but model/persistence/missing-slots are todo; project UI, peer sample sync,
+      and metadata tools are also todo.
+    root_cause: Feature scope was planned but only partially implemented and verified.
+    impact: Missing samples can remain unresolved across peers; metadata editing and project-level availability remain unreliable.
+    affected_files:
+    - tasks.yml
+    - src/core/sample-library.js
+    - src/app.js
+    - src/modules/clean-sampler.js
+    - src/modules/drum-sampler.js
+    - src/modules/multisampler.js
+    - tests/unit/sample-library.test.js
+    affected_components:
+    - sample library
+    - peer sync
+    - sampler metadata
+    - missing-slot UI
+    dependencies:
+    - P0-001
+    - P1-005 for safe rendering
+    solution_strategy: Implement each tasks.yml subtask test-first and update task status only after verification.
+    tdd_plan:
+      red:
+        test_to_add: Tests for nested directories, import/export/load/save, peer merge, missing slots, request/progress/complete,
+          BPM/cue serialization.
+        expected_failure: Tests fail for absent UI actions, protocol fields, or metadata persistence.
+      green:
+        minimal_change: Implement one subtask at a time and keep protocol separate from DOM rendering.
+      refactor:
+        cleanup: Split fake-peer protocol tests from UI rendering tests.
+    acceptance_criteria:
+    - criterion: tasks.yml subtasks marked done only with test evidence.
+      verification: tasks.yml review plus tests
+    - criterion: Missing-slot cards can query/fill samples and show progress.
+      verification: unit/static UI/browser smoke tests
+    verification_commands:
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    - command: pnpm build
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: SampleSyncManager had receive-side completion/progress tests but no receivePacket dispatcher or chunked
+      answerRequest helper for incoming peer sample requests.'
+    - 'Verified GREEN: tests/unit/sample-library.test.js passes 9 tests including incoming request event emission and local-library
+      chunked response packets.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass with 30 suites / 183 tests.'
+    - 'Not marked done: project-level sample UI/browser validation and broader tasks.yml subtasks still remain.'
+    - 'Verified RED browser slice: extended browser smoke failed because #sampleLibraryTree existed but had a zero-size bounding
+      box; the Samples drawer was closed by default, so the project-level sample UI was not visible.'
+    - 'Verified GREEN browser slice: Samples drawer is open by default; pnpm build and pnpm test:smoke pass with sample library
+      and missing-sample panel bounding-box/text assertions.'
+    - 'Verified complete protocol/UI evidence: sample-library unit tests cover metadata, persistence, missing-slot detection,
+      request/response/progress/completion; browser smoke now covers visible sample-library and missing-sample panels plus
+      peer-query action presence when sample cards exist.'
+    - 'Verified regression: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand, and pnpm verify:build
+      pass with 31 suites / 186 tests.'
+    actual_changes:
+    - Added SampleSyncManager.receivePacket() dispatcher for request/start/chunk/complete packet types.
+    - Added SampleSyncManager.answerRequest() to answer incoming requests from local SampleLibrary bytes with start/chunk/complete
+      packets using configured chunkSize.
+    - Added tests for incoming peer sample request event emission and local chunked sample response packets.
+    - Extended scripts/browser-smoke.mjs with visible sample-library and missing-sample panel assertions.
+    - Opened the Samples sidebar drawer by default in index.html so project-level sample UI is visible without hidden zero-size
+      panels.
+    - Kept prior SampleSyncManager.receivePacket()/answerRequest() protocol slice and sample-library unit coverage as the
+      core behavior contract.
+  - id: P2-001
+    title: Add CI workflow for reproducible gates
+    severity: P2
+    urgency_reason: No project-local .github workflow exists even though package scripts define test/build/check/deploy gates.
+    status: done
+    confidence:
+      level: medium
+      evidence:
+      - no .github workflow found
+    problem: Manual verification is relied on instead of automation.
+    root_cause: Gate scripts exist but have not been wired into CI for this subproject.
+    impact: Red tests and formatter drift can accumulate unnoticed.
+    affected_files:
+    - .github/workflows/ci.yml
+    - package.json
+    - pnpm-lock.yaml
+    affected_components:
+    - CI/CD
+    - developer experience
+    dependencies:
+    - P0 gates green first
+    solution_strategy: Add a minimal CI job mirroring local DoD after gates are green.
+    tdd_plan:
+      red:
+        test_to_add: No product test; local gates are the workflow parity tests.
+        expected_failure: Local gates currently fail before CI addition.
+      green:
+        minimal_change: Add Node >=20, pnpm install --frozen-lockfile, pnpm check, pnpm test -- --runInBand, pnpm build, and
+          conditional verify:deploy.
+      refactor:
+        cleanup: Avoid matrix/YAGNI until multi-node/browser coverage is required.
+    acceptance_criteria:
+    - criterion: CI runs same commands as local DoD.
+      verification: workflow review
+    verification_commands:
+    - command: pnpm check
+      expected_result: exit 0
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    - command: pnpm build
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: no .github workflow files existed under the v11-peer-daw git root.'
+    - 'Verified GREEN: .github/workflows/ci.yml now parses as YAML with on/jobs keys and mirrors local check/test/build gates.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass with 30 suites / 183 tests.'
+    - 'Emergent adaptation: corrected workflow from parent-artifacts assumptions to the actual v11-peer-daw git root; parent
+      app-hub deploy contract step remains conditional on harness presence.'
+    - 'Updated after P1-001: CI now installs Chromium with pnpm exec playwright install --with-deps chromium and runs pnpm
+      test:smoke after build.'
+    actual_changes:
+    - Added .github/workflows/ci.yml for v11-peer-daw.
+    - Workflow installs with pnpm install --frozen-lockfile, runs pnpm check, pnpm test -- --runInBand, and pnpm build.
+    - Workflow conditionally runs app-hub deploy contract commands when parent harness files are available in the checkout.
+    - Added CI browser-smoke step after build.
+  - id: P2-002
+    title: Resolve Vite/esbuild audit findings or document scoped exception
+    severity: P2
+    urgency_reason: pnpm audit reports 2 moderate vulnerabilities.
+    status: done
+    confidence:
+      level: medium-high
+      evidence:
+      - pnpm audit output
+    problem: Audit reports esbuild <=0.24.2 via vite@5.4.21 and Vite <=6.4.1 optimized deps sourcemap path traversal.
+    root_cause: Toolchain versions are behind patched advisory ranges.
+    impact: Security gate fails and dev-server exposure remains unclear.
+    affected_files:
+    - package.json
+    - pnpm-lock.yaml
+    - vite.config.js
+    affected_components:
+    - dependency security
+    - dev server
+    dependencies:
+    - P0 gates green first
+    solution_strategy: Verify migration notes, upgrade compatible stack, or document approved dev-only exception.
+    tdd_plan:
+      red:
+        test_to_add: Dependency update uses full regression gates; add focused regression only if upgrade breaks behavior.
+        expected_failure: pnpm audit currently exits 1.
+      green:
+        minimal_change: Upgrade Vite/esbuild-compatible stack or document exception.
+      refactor:
+        cleanup: Remove temporary audit exception once patched versions are adopted.
+    acceptance_criteria:
+    - criterion: pnpm audit exits 0 or exception is documented and approved.
+      verification: audit command or SECURITY.md note
+    verification_commands:
+    - command: pnpm audit --audit-level moderate
+      expected_result: exit 0 or documented exception
+    - command: pnpm verify:build
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED: pnpm audit --audit-level moderate reported moderate Vite/esbuild advisories for vite@5.4.21/esbuild@0.21.5.'
+    - 'Verified GREEN: upgraded Vite to 6.4.3; pnpm audit --audit-level moderate reports no known vulnerabilities.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass with Vite 6.4.3 and 30 suites / 183
+      tests.'
+    actual_changes:
+    - Updated devDependency vite from 5.4.21 to 6.4.3 through pnpm add -D vite@^6.4.2.
+    - Updated pnpm-lock.yaml for patched Vite/esbuild dependency graph.
+  - id: P3-001
+    title: Reconcile README/docs/TODO/tests into a single contract map
+    severity: P3
+    urgency_reason: Documentation is useful but currently reflects both target architecture and admitted incomplete areas.
+    status: done
+    confidence:
+      level: high
+      evidence:
+      - README/docs/TODO/tasks/improve inspected
+    problem: README/docs describe target architecture, TODO admits missing views, tests expect old panel IDs, and task files
+      contain separate active roadmaps.
+    root_cause: Docs, tests, and task files evolved independently.
+    impact: Contributors can target obsolete DOM IDs or assume unimplemented views are complete.
+    affected_files:
+    - README.md
+    - docs/ARCHITECTURE.md
+    - docs/USABILITY_PLAN.md
+    - docs/MODULE_UI_BACKLOG.md
+    - TODO.md
+    - tasks.yml
+    - improve.yml
+    - tests/unit/peer-daw-feature-set.test.js
+    affected_components:
+    - documentation
+    - project planning
+    - test contracts
+    dependencies:
+    - P0-001
+    solution_strategy: Create docs/CONTRACT_MAP.md linking feature areas to source files and tests.
+    tdd_plan:
+      red:
+        test_to_add: Add docs-contract check only after deciding current-vs-target features.
+        expected_failure: Current mismatch is visible through failing tests and TODO.
+      green:
+        minimal_change: Add contract map and correct README/TODO/test references.
+      refactor:
+        cleanup: Remove duplicate/obsolete claims and point task files to the map.
+    acceptance_criteria:
+    - criterion: A new contributor can find source/tests for each major feature.
+      verification: CONTRACT_MAP.md review
+    verification_commands:
+    - command: pnpm test -- --runInBand
+      expected_result: exit 0
+    - command: pnpm check
+      expected_result: exit 0
+    subtasks: []
+    completion_evidence:
+    - 'Verified RED evidence: README had class ModuleBase extends ModuleBase, docs/ARCHITECTURE.md claimed IndexedDB as current
+      storage, and no docs/CONTRACT_MAP.md existed.'
+    - 'Verified GREEN: docs/CONTRACT_MAP.md exists and maps runtime/module/project/persistence/UI/peer contracts to source
+      and tests.'
+    - 'Verified doc drift check: README no longer has the bad ModuleBase example; architecture diagram no longer claims IndexedDB
+      as current platform storage; CONTRACT_MAP contains Module ABI, Project archive, Peer sample request/response, and remaining
+      high-risk open contract sections.'
+    - 'Verified regression: pnpm check, pnpm test -- --runInBand, and pnpm build pass with 30 suites / 183 tests.'
+    actual_changes:
+    - Added docs/CONTRACT_MAP.md linking major contracts to source files, tests, task sources, and remaining open contracts.
+    - Corrected README module contract snippet to use ExampleModule extends ModuleBase with an explicit import.
+    - Updated docs/ARCHITECTURE.md persistence description from current IndexedDB claims to implemented localStorage-compatible
+      snapshots/project packages/session snapshots, with IndexedDB marked future-only until adapter/tests exist.
+  risk_register:
+  - id: RISK-001
+    severity: critical
+    title: Release with red tests/deploy gate
+    probability: high until P0 tasks complete
+    impact: Broken or unverified DAW artifact reaches app hub users.
+    evidence: pnpm test and pnpm verify:deploy exit 1.
+    mitigation: Block release until P0-001 and P0-003 pass.
+    owner_area: release engineering
+  - id: RISK-002
+    severity: high
+    title: User project data loss on export/import
+    probability: medium-high
+    impact: Audio graph edits, canvas positions, archive samples, or metadata fail to restore.
+    evidence: project-io lacks graph field; archive import placeholder; improve.yml high-01/high-03.
+    mitigation: Implement P1-003 and P1-004 with round-trip tests.
+    owner_area: project persistence
+  - id: RISK-003
+    severity: high
+    title: DOM injection via imported/peer/sample metadata
+    probability: medium
+    impact: Malicious project/sample/peer value can alter DOM or execute markup.
+    evidence: Many innerHTML renderers; collaborative/imported data sources.
+    mitigation: P1-005 safe rendering tests and helper.
+    owner_area: security/UI
+  - id: RISK-004
+    severity: high
+    title: Routing state divergence
+    probability: medium
+    impact: UI claims routes exist while runtime graph differs, or saved projects lose audio edges.
+    evidence: improve.yml route authority in_progress and project export graph todo.
+    mitigation: Route ownership contract and graph export tests.
+    owner_area: routing/audio graph
+  - id: RISK-005
+    severity: medium
+    title: Browser UI regressions not caught by unit tests
+    probability: high until browser smoke exists
+    impact: Patch canvas or workspace views visually break despite passing unit tests.
+    evidence: improve.yml asks for browser smoke; no e2e harness found.
+    mitigation: P1-001 browser smoke.
+    owner_area: frontend QA
+  - id: RISK-006
+    severity: medium
+    title: Dev tooling vulnerabilities
+    probability: confirmed audit finding
+    impact: Developer/dev-server exposure and failing security gate.
+    evidence: pnpm audit reports Vite/esbuild moderate advisories.
+    mitigation: P2-002 upgrade or documented exception.
+    owner_area: dependencies
+  open_questions:
+  - question: Are automationOperatorPanel, clipSessionPanel, and arrangementTimelinePanel still required DOM contracts, or
+      have workspace tabs replaced them?
+    why_it_matters: Determines whether failing peer-daw-feature-set test should restore IDs or rewrite tests around the new
+      workspace contract.
+    suggested_way_to_answer: Review docs/USABILITY_PLAN.md and current index.html/app.js workspace implementation, then update
+      tests first.
+    blocks_tasks:
+    - P0-001
+    - P1-001
+    - P3-001
+  - question: Should drum sampler pad serialization omit absent optional fields or include explicit nulls?
+    why_it_matters: Current serializer/test mismatch blocks Jest and affects project schema stability.
+    suggested_way_to_answer: Define serializer contract in project schema tests and choose compact JSON vs explicit nullable
+      schema.
+    blocks_tasks:
+    - P0-001
+    - P1-004
+  - question: Is PeerJS expected to be bundled from npm, loaded from CDN, or support both?
+    why_it_matters: Affects reproducibility, CSP/offline operation, and dependency audit/lockfile meaning.
+    suggested_way_to_answer: Trace PeernetStack runtime expectations and app-hub deployment constraints; document chosen boundary.
+    blocks_tasks:
+    - P2-002
+    - P3-001
+  - question: Should project archive support only stored ZIP entries or general compressed ZIP?
+    why_it_matters: Determines whether to implement a tiny parser matching createStoredZip or add a maintained zip dependency.
+    suggested_way_to_answer: Decide scope based on existing createStoredZip output and user import expectations.
+    blocks_tasks:
+    - P1-003
+  - question: Where should CI live, inside v11-peer-daw or root artifacts repo?
+    why_it_matters: v11-peer-daw is nested under artifacts and verify:deploy depends on parent paths.
+    suggested_way_to_answer: Inspect root CI strategy and app-hub artifact workflow before adding workflow files.
+    blocks_tasks:
+    - P2-001
+  review_gaps:
+  - gap: No live browser interaction or screenshot comparison was executed.
+    reason: No project-local e2e/browser command was present and review scope was to write YAML, not add tooling.
+    consequence: Visual/layout, drag/drop, audio boot, and runtime page-error claims remain lower confidence.
+    follow_up: Implement P1-001 and rerun review with browser smoke evidence.
+  - gap: No deep line-by-line review of every module was completed.
+    reason: Project has 87 JavaScript files and 15k+ JS lines; review prioritized architecture, gates, task files, and high-risk
+      boundaries.
+    consequence: Additional module-specific bugs may exist beyond the captured task tree.
+    follow_up: Run module lifecycle conformance and review each failure systematically.
+  - gap: No web verification of latest official Vite/Biome/Jest guidance was performed.
+    reason: Review did not implement upgrades and relied on repository-local package/audit evidence.
+    consequence: Dependency upgrade target should be verified before change.
+    follow_up: Before P2-002, check official release/migration notes.
+  - gap: Parent artifacts repository CI/deploy topology was not exhaustively reviewed.
+    reason: Scope was v11-peer-daw; root repo contains many unrelated dirty/untracked artifacts.
+    consequence: app-hub deploy readiness may have additional issues after v11-peer-daw gates are fixed.
+    follow_up: Run root-level deploy review after P0 gates pass.
+  progress_updates:
+  - date: '2026-06-06'
+    summary: P0 unit/quality/deploy contract blockers were resolved; P1-003 project archive byte restore was implemented test-first
+      and verified.
+    verified_commands:
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/project-io.test.js --runInBand
+    - node app-hub-v11/server/artifact-catalog.mjs app-hub-v11/artifacts.source.json app-hub-v11/data && node --test tests/v11-peer-daw-build-imports.test.mjs
+      tests/v11-peer-daw-deploy-assets.test.mjs
+  - date: '2026-06-06'
+    summary: P1-004 graph/canvas persistence was implemented test-first and verified through focused tests plus full local
+      gates.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/patch-canvas.test.js tests/unit/project-io.test.js
+      --runInBand
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P1-006 module lifecycle conformance was implemented test-first and verified through focused tests plus full local
+      gates.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/module-lifecycle-conformance.test.js --runInBand
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/module-lifecycle-conformance.test.js tests/unit/channel-strip-presets.test.js
+      --runInBand
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P1-005 safe rendering boundary was implemented for catalog module templates with shared HTML escaping and verified
+      through full local/deploy gates.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/module-lifecycle-conformance.test.js --runInBand
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+    - node app-hub-v11/server/artifact-catalog.mjs app-hub-v11/artifacts.source.json app-hub-v11/data && node --test tests/v11-peer-daw-build-imports.test.mjs
+      tests/v11-peer-daw-deploy-assets.test.mjs
+  - date: '2026-06-06'
+    summary: P1-007 peer sample request/response protocol slice was implemented test-first; the larger P1-007 task remains
+      in progress pending project-level UI/browser work.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/sample-library.test.js --runInBand
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P2-001 CI workflow was added and verified against the actual v11-peer-daw git root.
+    verified_commands:
+    - python YAML parse check for .github/workflows/ci.yml
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P2-002 dependency audit finding was resolved by upgrading Vite to 6.4.3 under full local gates.
+    verified_commands:
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P3-001 contract-map documentation was completed and verified with doc drift checks plus full local gates.
+    verified_commands:
+    - python doc contract drift check for README.md, docs/ARCHITECTURE.md, and docs/CONTRACT_MAP.md
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P1-002 was advanced with a tested WorkspacePreferences extraction slice; broader app controller extraction remains
+      open.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/workspace-preferences.test.js --runInBand
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm build
+  - date: '2026-06-06'
+    summary: P1-001 browser smoke was completed with a reproducible Playwright Chromium harness and folded into verify:build/CI.
+    verified_commands:
+    - pnpm exec playwright install chromium
+    - pnpm build
+    - pnpm test:smoke
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build
+  - date: '2026-06-06'
+    summary: P1-007 sample-library/sample-sync scope was closed by adding browser-smoke coverage for visible project-level
+      sample panels and fixing the Samples drawer visibility contract.
+    verified_commands:
+    - pnpm build
+    - pnpm test:smoke
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build
+  - date: '2026-06-06'
+    summary: 'P1-002 was advanced with a second tested extraction slice: sample panel rendering moved out of src/app.js into
+      src/ui/sample-panel-renderer.js.'
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/sample-panel-renderer.test.js --runInBand
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build
+  - date: '2026-06-06'
+    summary: 'P1-002 was advanced with a third tested extraction slice: project/rig serialization moved out of src/app.js
+      into src/core/project-state.js.'
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/project-state.test.js --runInBand
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build

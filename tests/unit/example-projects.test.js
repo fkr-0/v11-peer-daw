@@ -34,7 +34,9 @@ describe('peer DAW example projects', () => {
       expect(example.assets).toEqual([]);
       expect(example.modules.length).toBeGreaterThanOrEqual(8);
       expect(example.routes.length).toBeGreaterThanOrEqual(7);
-      expect(example.notes.join(' ')).toMatch(/No Slum Village recordings, samples, lyrics, or melody transcriptions/);
+      expect(example.notes.join(' ')).toMatch(
+        /No Slum Village recordings, samples, lyrics, or melody transcriptions/
+      );
 
       const moduleIds = new Set(example.modules.map((module) => module.id));
       expect(moduleIds.has('main-mixer')).toBe(true);
@@ -56,7 +58,9 @@ describe('peer DAW example projects', () => {
     const clone = clonePeerDawExampleProject('fall-in-love-remix-sketch');
     expect(clone).not.toBe(findPeerDawExampleProject('fall-in-love-remix-sketch'));
     clone.modules[0].title = 'changed locally';
-    expect(findPeerDawExampleProject('fall-in-love-remix-sketch').modules[0].title).toBe('96 BPM Remix Clock');
+    expect(findPeerDawExampleProject('fall-in-love-remix-sketch').modules[0].title).toBe(
+      '96 BPM Remix Clock'
+    );
   });
 
   test('clock module serializes and hydrates bpm for example import/export correctness', () => {

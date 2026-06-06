@@ -30,7 +30,9 @@ describe('composed experimental soundscape presets', () => {
       expect.arrayContaining(['delay', 'dubecho', 'phaser', 'reverb'])
     );
     expect(preset.automation.lanes.length).toBeGreaterThan(3);
-    expect(preset.routing).toEqual(expect.arrayContaining([expect.objectContaining({ feedback: true })]));
+    expect(preset.routing).toEqual(
+      expect.arrayContaining([expect.objectContaining({ feedback: true })])
+    );
   });
 
   test('normalizes and round-trips composed preset banks as JSON', () => {

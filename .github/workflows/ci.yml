@@ -1,0 +1,73 @@
+name: v11-peer-daw-ci
+
+'on':
+  push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'vendor/**'
+      - 'docs/**'
+      - 'index.html'
+      - 'style.css'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.js'
+      - 'jest.config.js'
+      - 'biome.json'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'vendor/**'
+      - 'docs/**'
+      - 'index.html'
+      - 'style.css'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.js'
+      - 'jest.config.js'
+      - 'biome.json'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and lint rules
+        run: pnpm check
+
+      - name: Run unit tests
+        run: pnpm test -- --runInBand
+
+      - name: Install Chromium for browser smoke
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build production artifact
+        run: pnpm build
+
+      - name: Run browser smoke
+        run: pnpm test:smoke
+
+      - name: Verify app-hub deploy contracts when parent artifact harness is present
+        if: ${{ hashFiles('app-hub-v11/server/artifact-catalog.mjs', 'app-hub-v11/artifacts.source.json', 'tests/v11-peer-daw-*.test.mjs') != '' }}
+        run: |
+          node app-hub-v11/server/artifact-catalog.mjs app-hub-v11/artifacts.source.json app-hub-v11/data
+          node --test tests/v11-peer-daw-build-imports.test.mjs tests/v11-peer-daw-deploy-assets.test.mjs

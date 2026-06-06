@@ -7,6 +7,7 @@ import {
   createMidiPacket,
   uid,
 } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { createTheoryPattern } from '../core/music-theory-patterns.js';
 
 const SWING_AMOUNTS = Object.freeze({
@@ -191,7 +192,7 @@ export class PianoRollModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>▦</span><strong>${this.title}</strong><small>MIDI/CONTROL OUT</small></div>
+      <div class="module-head"><span>▦</span><strong>${escapeHtml(this.title)}</strong><small>MIDI/CONTROL OUT</small></div>
       <div class="effect-rack">
         <label>Swing
           <select class="mini-input" data-swing>${Object.keys(SWING_AMOUNTS)

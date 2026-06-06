@@ -1,5 +1,6 @@
 // PeerModGroove/src/modules/effects.js
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -75,7 +76,7 @@ class EffectModule extends ModuleBase {
   render() {
     if (!this.root) return;
     const params = this.params || [];
-    this.root.innerHTML = `<div class="module-head"><span>✦</span><strong>${this.title}</strong><small>AUDIO EFFECT</small></div><div class="effect-rack">${params.map((p) => `<label>${p.label}<input class="mini-input" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${this[p.key]}" data-param="${p.key}"></label>`).join('')}</div><p class="microcopy">${this.description || 'WebAudio effect module.'}</p>`;
+    this.root.innerHTML = `<div class="module-head"><span>✦</span><strong>${escapeHtml(this.title)}</strong><small>AUDIO EFFECT</small></div><div class="effect-rack">${params.map((p) => `<label>${p.label}<input class="mini-input" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${this[p.key]}" data-param="${p.key}"></label>`).join('')}</div><p class="microcopy">${escapeHtml(this.description || 'WebAudio effect module.')}</p>`;
     this.root.querySelectorAll('[data-param]').forEach(
       (el) =>
         (el.oninput = (e) => {
@@ -365,7 +366,8 @@ export class BeatRepeatModule extends BpmBeatLooperModule {
 export class GrainDelayModule extends EffectModule {
   constructor(c = {}) {
     super({ id: c.id || uid('graindelay'), title: c.title || 'Grain Delay' });
-    this.description = 'Granular-style dual micro-delay texture with size, spray, feedback, and wet controls.';
+    this.description =
+      'Granular-style dual micro-delay texture with size, spray, feedback, and wet controls.';
     this.grainSize = c.grainSize ?? 0.055;
     this.spray = c.spray ?? 0.018;
     this.feedback = c.feedback ?? 0.38;
@@ -395,7 +397,11 @@ export class GrainDelayModule extends EffectModule {
 
   applyParams() {
     this.nodes.grain?.delayTime.setTargetAtTime(this.grainSize, this.ctx.currentTime, 0.01);
-    this.nodes.spray?.delayTime.setTargetAtTime(this.grainSize + this.spray, this.ctx.currentTime, 0.01);
+    this.nodes.spray?.delayTime.setTargetAtTime(
+      this.grainSize + this.spray,
+      this.ctx.currentTime,
+      0.01
+    );
     this.nodes.feedback?.gain.setTargetAtTime(this.feedback, this.ctx.currentTime, 0.02);
     this.nodes.wet?.gain.setTargetAtTime(this.wet, this.ctx.currentTime, 0.02);
   }
@@ -435,11 +441,15 @@ export class PitchShiftModule extends EffectModule {
   }
 
   applyParams() {
-    const ratio = Math.pow(2, this.semitones / 12);
+    const ratio = 2 ** (this.semitones / 12);
     const base = Math.max(0.001, this.window / Math.max(0.25, ratio));
     this.nodes.shiftA?.delayTime.setTargetAtTime(base, this.ctx.currentTime, 0.01);
     this.nodes.shiftB?.delayTime.setTargetAtTime(base * 1.5, this.ctx.currentTime, 0.01);
-    this.nodes.lfo?.frequency.setTargetAtTime(Math.max(0.1, Math.abs(this.semitones) * 0.15 + 0.3), this.ctx.currentTime, 0.02);
+    this.nodes.lfo?.frequency.setTargetAtTime(
+      Math.max(0.1, Math.abs(this.semitones) * 0.15 + 0.3),
+      this.ctx.currentTime,
+      0.02
+    );
     this.nodes.depth?.gain.setTargetAtTime(base * 0.5, this.ctx.currentTime, 0.02);
     this.nodes.wet?.gain.setTargetAtTime(this.mix, this.ctx.currentTime, 0.02);
   }

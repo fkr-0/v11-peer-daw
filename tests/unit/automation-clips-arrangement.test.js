@@ -2,17 +2,17 @@
 // Core models for automation operators, clips/session launch, and arrangement playback.
 
 import { describe, expect, test } from '@jest/globals';
-import { PortType } from '../../src/core/contracts.js';
 import {
+  Arrangement,
   AutomationClip,
   AutomationLane,
   AutomationOperator,
   Clip,
   ClipSlot,
-  Arrangement,
   createParameterAutomationPacket,
   quantizeBeat,
 } from '../../src/core/clips-arrangement.js';
+import { PortType } from '../../src/core/contracts.js';
 
 describe('automation operators and lanes', () => {
   test('automation lane evaluates stepped, linear, and LFO operators over clip-local beats', () => {
@@ -34,7 +34,16 @@ describe('automation operators and lanes', () => {
       targetModuleId: 'phaser-1',
       targetParam: 'rate',
       defaultValue: 0.5,
-      operators: [new AutomationOperator({ type: 'lfo', startBeat: 0, endBeat: 4, min: 0.1, max: 1.1, cycles: 1 })],
+      operators: [
+        new AutomationOperator({
+          type: 'lfo',
+          startBeat: 0,
+          endBeat: 4,
+          min: 0.1,
+          max: 1.1,
+          cycles: 1,
+        }),
+      ],
     });
 
     expect(lfo.valueAt(0)).toBeCloseTo(0.6, 5);
@@ -58,7 +67,12 @@ describe('automation operators and lanes', () => {
 
     expect(clip.lengthBeats).toBe(8);
     expect(clip.controlPacketsAt(12)).toEqual([
-      createParameterAutomationPacket({ targetModuleId: 'delay-1', targetParam: 'feedback', value: 0.5, beat: 12 }),
+      createParameterAutomationPacket({
+        targetModuleId: 'delay-1',
+        targetParam: 'feedback',
+        value: 0.5,
+        beat: 12,
+      }),
     ]);
   });
 });
@@ -82,8 +96,23 @@ describe('clips and session launch', () => {
 
     expect(clip.lengthBeats).toBe(4);
     expect(clip.eventsAt(0)).toEqual([
-      { kind: PortType.MIDI, type: 'note-on', note: 'C2', velocity: 0.8, beat: 0, channelId: 'bass', duration: 1 },
-      { kind: PortType.CONTROL, type: 'param', target: 'cutoff', value: 900, targetModuleId: 'bass-filter', beat: 0 },
+      {
+        kind: PortType.MIDI,
+        type: 'note-on',
+        note: 'C2',
+        velocity: 0.8,
+        beat: 0,
+        channelId: 'bass',
+        duration: 1,
+      },
+      {
+        kind: PortType.CONTROL,
+        type: 'param',
+        target: 'cutoff',
+        value: 900,
+        targetModuleId: 'bass-filter',
+        beat: 0,
+      },
     ]);
   });
 
@@ -117,16 +146,37 @@ describe('arrangement timeline', () => {
       channelId: 'atmo',
       lengthBars: 2,
       midi: [{ beat: 1, note: 'A2', velocity: 0.5, duration: 2 }],
-      automation: [{ targetModuleId: 'reverb-1', targetParam: 'wet', operators: [{ type: 'linear', startBeat: 0, endBeat: 8, from: 0.2, to: 0.9 }] }],
+      automation: [
+        {
+          targetModuleId: 'reverb-1',
+          targetParam: 'wet',
+          operators: [{ type: 'linear', startBeat: 0, endBeat: 8, from: 0.2, to: 0.9 }],
+        },
+      ],
     });
     const arrangement = new Arrangement({ loopStartBeat: 16, loopEndBeat: 24 });
 
     arrangement.placeClip({ clip, startBeat: 16, trackId: 'atmo-track' });
 
-    expect(arrangement.activeClipsAt(17)).toEqual([expect.objectContaining({ clip, localBeat: 1 })]);
+    expect(arrangement.activeClipsAt(17)).toEqual([
+      expect.objectContaining({ clip, localBeat: 1 }),
+    ]);
     expect(arrangement.eventsAt(17)).toEqual([
-      { kind: PortType.MIDI, type: 'note-on', note: 'A2', velocity: 0.5, beat: 17, channelId: 'atmo', duration: 2 },
-      expect.objectContaining({ kind: PortType.CONTROL, targetModuleId: 'reverb-1', target: 'wet', beat: 17 }),
+      {
+        kind: PortType.MIDI,
+        type: 'note-on',
+        note: 'A2',
+        velocity: 0.5,
+        beat: 17,
+        channelId: 'atmo',
+        duration: 2,
+      },
+      expect.objectContaining({
+        kind: PortType.CONTROL,
+        targetModuleId: 'reverb-1',
+        target: 'wet',
+        beat: 17,
+      }),
     ]);
     expect(arrangement.transportPositionAfter(25, { loop: true })).toBe(17);
   });

@@ -71,6 +71,27 @@ describe('project IO packages', () => {
     expect(pkg.text).not.toContain('dataBase64');
   });
 
+  test('exports graph edges and patch canvas positions for project round-trips', async () => {
+    const source = {
+      ...projectSource(),
+      graph: {
+        nodes: [{ id: 'sampler-a', title: 'String Sample', kind: 'audio-source' }],
+        edges: [{ from: 'sampler-a', to: 'main-mixer', type: 'audio' }],
+        chains: [['main', ['sampler-a', 'main-mixer']]],
+      },
+      canvasPositions: {
+        'sampler-a': { x: 144, y: 233 },
+        'main-mixer': { x: 420, y: 233 },
+      },
+    };
+
+    const pkg = await createProjectPackage(source, { mode: 'just-project' });
+    const project = JSON.parse(pkg.text);
+
+    expect(project.graph).toEqual(source.graph);
+    expect(project.canvasPositions).toEqual(source.canvasPositions);
+  });
+
   test('exports inline-samples-project as JSON with WAV samples encoded as base64', async () => {
     const pkg = await createProjectPackage(projectSource(), { mode: 'inline-samples-project' });
     const project = JSON.parse(pkg.text);
@@ -115,6 +136,30 @@ describe('project IO packages', () => {
     expect(zipText).toContain('project.json');
     expect(zipText).toContain('samples/sampler-a/sample.wav');
     expect(zipText).toContain('samples/drum-a/kick.wav');
+  });
+
+  test('restores project archive bytes from stored zip entries', async () => {
+    const archive = await createProjectPackage(projectSource(), { mode: 'project-archive' });
+    const parsed = parseProjectPayload(archive.bytes);
+
+    expect(parsed.exportMode).toBe('project-archive');
+    expect(parsed.modules.map((module) => module.id)).toEqual(['sampler-a', 'drum-a', 'roll-a']);
+    expect(parsed.routes).toEqual(projectSource().routes);
+    expect(parsed.assets).toEqual([
+      expect.objectContaining({ id: 'sampler-a/sample', path: 'samples/sampler-a/sample.wav' }),
+      expect.objectContaining({ id: 'drum-a/kick', path: 'samples/drum-a/kick.wav' }),
+    ]);
+    expect(parsed.archiveEntries.map((entry) => entry.name)).toEqual([
+      'project.json',
+      'samples/sampler-a/sample.wav',
+      'samples/drum-a/kick.wav',
+    ]);
+  });
+
+  test('rejects unsafe archive entry names before project restore', () => {
+    const payload = new TextEncoder().encode('not a zip with ../evil.wav in it');
+
+    expect(() => parseProjectPayload(payload)).toThrow(/Invalid project archive/i);
   });
 
   test('parses JSON text and archive-base64 clipboard payloads', async () => {

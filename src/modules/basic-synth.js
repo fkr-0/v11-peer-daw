@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/basic-synth.js
 
 import { ModuleBase, PortType, midiNoteToFrequency, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
 export class BasicSynthModule extends ModuleBase {
@@ -72,7 +73,7 @@ export class BasicSynthModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◍</span><strong>${this.title}</strong><small>MIDI IN / AUDIO OUT</small></div>
+      <div class="module-head"><span>◍</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / AUDIO OUT</small></div>
       <select class="mini-input">
         ${['sine', 'sawtooth', 'square', 'triangle'].map((w) => `<option ${w === this.waveform ? 'selected' : ''}>${w}</option>`).join('')}
       </select>

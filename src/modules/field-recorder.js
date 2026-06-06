@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/field-recorder.js
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 export class FieldRecorderModule extends ModuleBase {
   constructor(config = {}) {
@@ -73,10 +74,10 @@ export class FieldRecorderModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>◉</span><strong>${this.title}</strong><small>CONTROL IN / AUDIO OUT</small></div>
+      <div class="module-head"><span>◉</span><strong>${escapeHtml(this.title)}</strong><small>CONTROL IN / AUDIO OUT</small></div>
       <input type="file" accept="audio/*" class="file-input">
       <button class="mini-button">PLAY SAMPLE</button>
-      <p class="microcopy">${this.fileName}</p>
+      <p class="microcopy">${escapeHtml(this.fileName)}</p>
     `;
     this.root
       .querySelector('input')

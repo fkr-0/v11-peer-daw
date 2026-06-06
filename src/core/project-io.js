@@ -40,6 +40,16 @@ function writeAscii(view, offset, text) {
     view.setUint8(offset + index, text.charCodeAt(index));
 }
 
+function assertSafeArchiveEntryName(name) {
+  if (!name || name.startsWith('/') || name.startsWith('\\\\') || name.includes('\\0')) {
+    throw new Error(`Invalid project archive entry: ${name}`);
+  }
+  const parts = name.split('/');
+  if (parts.some((part) => part === '..' || part === '')) {
+    throw new Error(`Invalid project archive entry: ${name}`);
+  }
+}
+
 function crc32(bytes) {
   let crc = -1;
   for (const byte of bytes) {
@@ -49,6 +59,50 @@ function crc32(bytes) {
     }
   }
   return (crc ^ -1) >>> 0;
+}
+
+function readStoredZip(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const entries = [];
+  let offset = 0;
+
+  try {
+    while (offset + 4 <= data.length) {
+      const signature = view.getUint32(offset, true);
+      if (signature === 0x02014b50 || signature === 0x06054b50) break;
+      if (signature !== 0x04034b50) throw new Error('missing local file header');
+      if (offset + 30 > data.length) throw new Error('truncated local file header');
+
+      const flags = view.getUint16(offset + 6, true);
+      const method = view.getUint16(offset + 8, true);
+      const expectedCrc = view.getUint32(offset + 14, true);
+      const compressedSize = view.getUint32(offset + 18, true);
+      const uncompressedSize = view.getUint32(offset + 22, true);
+      const nameLength = view.getUint16(offset + 26, true);
+      const extraLength = view.getUint16(offset + 28, true);
+      if (flags & 0x08) throw new Error('data descriptor archives are unsupported');
+      if (method !== 0) throw new Error('compressed archive entries are unsupported');
+      if (compressedSize !== uncompressedSize) throw new Error('compressed size mismatch');
+
+      const nameOffset = offset + 30;
+      const dataOffset = nameOffset + nameLength + extraLength;
+      const nextOffset = dataOffset + uncompressedSize;
+      if (nextOffset > data.length) throw new Error('truncated archive entry');
+
+      const name = new TextDecoder().decode(data.slice(nameOffset, nameOffset + nameLength));
+      assertSafeArchiveEntryName(name);
+      const entryBytes = data.slice(dataOffset, nextOffset);
+      if (crc32(entryBytes) !== expectedCrc) throw new Error(`CRC mismatch for ${name}`);
+      entries.push({ name, bytes: entryBytes });
+      offset = nextOffset;
+    }
+  } catch (error) {
+    throw new Error(`Invalid project archive: ${error.message}`);
+  }
+
+  if (!entries.length) throw new Error('Invalid project archive: no stored entries found');
+  return entries;
 }
 
 function createStoredZip(entries) {
@@ -298,6 +352,8 @@ function createProject(source, { mode }) {
     clips: source.clips || { currentBeat: 0, slots: [] },
     arrangement: source.arrangement || { loopStartBeat: 0, loopEndBeat: 0, clips: [] },
     mixer: source.mixer || { masterVolume: 0.8, channels: {} },
+    graph: source.graph || { nodes: [], edges: [], chains: [] },
+    canvasPositions: source.canvasPositions || {},
     assets:
       mode === 'inline-samples-project' ? assets.map(({ bytes: _bytes, ...asset }) => asset) : [],
   };
@@ -355,14 +411,15 @@ export async function createProjectPackage(source, { mode = 'just-project' } = {
 
 export function parseProjectPayload(payload) {
   if (payload instanceof ArrayBuffer || payload instanceof Uint8Array) {
+    const archiveBytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+    const archiveEntries = readStoredZip(archiveBytes);
+    const projectEntry = archiveEntries.find((entry) => entry.name === 'project.json');
+    if (!projectEntry) throw new Error('Invalid project archive: missing project.json');
+    const project = JSON.parse(new TextDecoder().decode(projectEntry.bytes));
     return {
-      schemaVersion: PROJECT_SCHEMA_VERSION,
-      type: PROJECT_TYPE,
-      exportMode: 'project-archive',
-      archiveBytes: payload instanceof Uint8Array ? payload : new Uint8Array(payload),
-      assets: [],
-      modules: [],
-      routes: [],
+      ...project,
+      archiveBytes,
+      archiveEntries: archiveEntries.map(({ name, bytes }) => ({ name, byteLength: bytes.length })),
     };
   }
   const text = String(payload || '').trim();

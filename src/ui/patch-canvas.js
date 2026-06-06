@@ -61,6 +61,25 @@ export class PatchCanvas {
     };
   }
 
+  serializePositions() {
+    return Object.fromEntries(
+      [...this.positions.entries()].map(([id, position]) => [
+        id,
+        { x: Number(position.x) || 0, y: Number(position.y) || 0 },
+      ])
+    );
+  }
+
+  restorePositions(positions = {}) {
+    this.positions.clear();
+    for (const [id, position] of Object.entries(positions || {})) {
+      this.positions.set(id, {
+        x: Math.max(0, Number(position?.x) || 0),
+        y: Math.max(0, Number(position?.y) || 0),
+      });
+    }
+  }
+
   clickPort(port, disconnect = false) {
     const id = port.closest('.patch-node')?.dataset.id;
     const type = port.dataset.port;

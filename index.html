@@ -35,64 +35,64 @@
     </header>
 
     <section class="workspace">
-      <aside class="panel module-palette">
+      <aside class="panel sidebar-left">
         <div>
-          <h2>Module Bay</h2>
+          <h2>Add Module</h2>
+          <input id="moduleSearch" class="mini-input" type="text" placeholder="filter modules…" aria-label="Filter modules" autocomplete="off">
           <select id="addModule" aria-label="Add module">
-            <option value="">+ add autonomous module…</option>
+            <option value="">+ add module…</option>
             <optgroup label="Timing & Control">
-              <option value="clock">Transport Clock · emits clock</option>
-              <option value="metronome">Metronome · audible click track</option>
+              <option value="clock">Transport Clock</option>
+              <option value="metronome">Metronome</option>
             </optgroup>
             <optgroup label="Sequencers">
-              <option value="ocra">OCRA Grid · collaborative ORCA sequencer</option>
-              <option value="pianoroll">Piano Roll · midi-like control</option>
-              <option value="sequencer">Sequencer · step sequencer</option>
-              <option value="basicseq">Basic Sequencer · legacy alias</option>
-              <option value="arp">Arpeggiator · generative patterns</option>
+              <option value="ocra">OCRA Grid</option>
+              <option value="pianoroll">Piano Roll</option>
+              <option value="sequencer">Step Sequencer</option>
+              <option value="arp">Arpeggiator</option>
             </optgroup>
             <optgroup label="Instruments">
-              <option value="synth">Basic Synth · foundational voice</option>
-              <option value="cleansynth">Clean Synth · polished midi voice</option>
-              <option value="polysynth">Poly Synth · detuned multi-oscillator voice</option>
-              <option value="analogsynth">Analog Subtractive Synth · saw/pulse/sub/filter/drive</option>
-              <option value="fmsynth">FM / Phase Mod Synth · 2-operator modulation</option>
-              <option value="wavetablesynth">Wavetable Synth · morphing harmonic tables</option>
-              <option value="drumsynth">Drum Synth · kick/snare/hat/clap voice</option>
-              <option value="drumsampler">Drum Sampler · assignable pads</option>
-              <option value="sampler">Clean Sampler · sample playback</option>
-              <option value="multisampler">MultiSampler · slice-based sampling</option>
+              <option value="synth">Basic Synth</option>
+              <option value="cleansynth">Clean Synth</option>
+              <option value="polysynth">Poly Synth</option>
+              <option value="analogsynth">Analog Subtractive</option>
+              <option value="fmsynth">FM Synth</option>
+              <option value="wavetablesynth">Wavetable Synth</option>
+              <option value="drumsynth">Drum Synth</option>
+              <option value="drumsampler">Drum Sampler</option>
+              <option value="sampler">Clean Sampler</option>
+              <option value="multisampler">MultiSampler</option>
             </optgroup>
             <optgroup label="Effects">
-              <option value="effects">Effects Rack · default dub delay</option>
-              <option value="reverb">Reverb · spatial ambience</option>
-              <option value="delay">Delay · clean feedback delay</option>
-              <option value="dubecho">Dub Echo · filtered feedback delay</option>
-              <option value="tapeecho">Tape Echo · wow & flutter delay</option>
-              <option value="phaser">Phaser · allpass sweep</option>
-              <option value="beatrepeat">Beat Repeat · stutter repeat</option>
-              <option value="graindelay">Grain Delay · granular micro-delay</option>
-              <option value="flanger">Flanger · jet sweep modulation</option>
-              <option value="pitchshift">Pitch Shift · comb-delay pitch shift</option>
+              <option value="effects">Effects Rack</option>
+              <option value="reverb">Reverb</option>
+              <option value="delay">Delay</option>
+              <option value="dubecho">Dub Echo</option>
+              <option value="tapeecho">Tape Echo</option>
+              <option value="phaser">Phaser</option>
+              <option value="beatrepeat">Beat Repeat</option>
+              <option value="graindelay">Grain Delay</option>
+              <option value="flanger">Flanger</option>
+              <option value="pitchshift">Pitch Shift</option>
             </optgroup>
             <optgroup label="Utilities">
-              <option value="wiring">Wiring Bridge · peer-aware routing utility</option>
-              <option value="channel">Channel Strip · gain/pan/mute</option>
-              <option value="master">Master Mixer · final output bus</option>
-              <option value="mixerdesk">Mixer Desk · expanded bus controls</option>
-              <option value="field">Field Recorder · capture audio</option>
-              <option value="beatlooper">Beat Looper · beat repeat effect</option>
+              <option value="wiring">Wiring Bridge</option>
+              <option value="channel">Channel Strip</option>
+              <option value="master">Master Mixer</option>
+              <option value="mixerdesk">Mixer Desk</option>
+              <option value="field">Field Recorder</option>
+              <option value="beatlooper">Beat Looper</option>
             </optgroup>
             <optgroup label="Networking">
-              <option value="peer">Peer Bridge · broadcast control</option>
+              <option value="peer">Peer Bridge</option>
             </optgroup>
           </select>
-          <p class="microcopy">Modules advertise input/output ports. The patch bay routes JSON-safe midi/control packets. Audio modules feed the central mixer by default.</p>
         </div>
 
         <div class="peer-panel">
-          <h2>Peer Session</h2>
+          <h2>Session</h2>
           <input id="pilotName" class="mini-input" value="pilot" aria-label="Pilot name">
+          <div id="sessionCode" class="session-code"></div>
           <div class="button-row">
             <button id="btnConnectPeer" type="button">CONNECT</button>
             <button id="btnCreateSession" type="button">SESSION</button>
@@ -100,110 +100,84 @@
           </div>
           <p class="microcopy"><span id="peerCount">0 peers</span> · <span id="storageStatus">storage ready</span></p>
           <p class="microcopy"><strong id="subLobbyStatus">sub-lobby: offline</strong></p>
-          <label class="microcopy inline-check"><input id="blockIncomingJoin" type="checkbox"> block auto-join visitors</label>
+          <label class="microcopy inline-check"><input id="blockIncomingJoin" type="checkbox"> block auto-join</label>
           <div class="button-row sub-lobby-actions">
-            <button id="btnHostSubLobby" type="button">HOST SUB-LOBBY</button>
-            <button id="btnNewSubLobby" type="button">NEW PROJECT ROOM</button>
-            <button id="btnCarrySubLobby" type="button">CARRY PROJECT ROOM</button>
+            <button id="btnHostSubLobby" type="button">HOST</button>
+            <button id="btnNewSubLobby" type="button">NEW ROOM</button>
+            <button id="btnCarrySubLobby" type="button">CARRY</button>
           </div>
           <div id="subLobbyPeerList" class="peer-list sub-lobby-peer-list"></div>
-          <p class="microcopy">identity → PeernetUserManager · app-hub visibility → PeernetLobby · sessions → PeernetSessionManager · storage → PeernetStorageManager</p>
-        </div>
-
-        <div class="session-panel">
-          <h2>Session Info</h2>
-          <div id="sessionCode" class="session-code"></div>
           <div id="peerList" class="peer-list"></div>
         </div>
 
-        <div class="session-panel sample-library-panel">
-          <h2>Global Sample Library</h2>
+        <details class="sidebar-drawer">
+          <summary>Project I/O</summary>
+          <select id="projectExportMode" class="mini-input" aria-label="Project export mode">
+            <option value="just-project">no samples</option>
+            <option value="inline-samples-project">inline b64 samples</option>
+            <option value="project-archive">ZIP archive</option>
+            <option value="project-replaced">placeholder synths</option>
+          </select>
+          <textarea id="projectIoText" class="mini-input" rows="4" placeholder="project JSON"></textarea>
+          <input id="projectImportFile" class="mini-input" type="file" accept="application/json,.json,application/zip,.zip">
+          <div class="button-row">
+            <button id="btnCopyProject" type="button">COPY</button>
+            <button id="btnPasteProject" type="button">PASTE</button>
+            <button id="btnDownloadProject" type="button">DOWNLOAD</button>
+          </div>
+        </details>
+
+        <details class="sidebar-drawer" open>
+          <summary>Samples</summary>
           <input id="sampleLibraryUploadFile" class="mini-input" type="file" accept="audio/*" multiple>
           <input id="sampleLibraryImportFile" class="mini-input" type="file" accept="application/json,.json">
           <div class="button-row">
             <button id="btnExportSampleLibrary" type="button">EXPORT LIB</button>
           </div>
-          <textarea id="sampleLibraryJson" class="mini-input" rows="4" placeholder="global library JSON import/export"></textarea>
+          <textarea id="sampleLibraryJson" class="mini-input" rows="3" placeholder="library JSON"></textarea>
           <div id="sampleLibraryTree" class="sample-library-tree"></div>
-          <p class="microcopy">Global library is above any one project. Project cards below only show which samples this project uses and whether sound content is available locally.</p>
-        </div>
-
-        <div class="session-panel project-samples-panel">
-          <h2>Project Used Samples</h2>
           <div id="missingSampleSlots" class="missing-sample-slots"></div>
-        </div>
+        </details>
 
-        <div class="session-panel arrangement-design-panel">
-          <h2>Automation / Clips / Arrangement</h2>
-          <div id="automationOperatorPanel" class="sample-library-tree">
-            <strong>Automation operators</strong>
-            <p class="microcopy">Operators target module parameters over clip-local beats: step, linear ramps, and LFO curves. A clip can carry MIDI notes plus any number of automation lanes.</p>
-          </div>
-          <div id="clipSessionPanel" class="sample-library-tree">
-            <strong>Clip session view</strong>
-            <p class="microcopy">Clip slots launch/stop in channels quantized to the global clock, Ableton-style. Clips contain a length in bars, MIDI/control events, velocity and parameter automation.</p>
-          </div>
-          <div id="arrangementTimelinePanel" class="sample-library-tree">
-            <strong>Arrangement timeline</strong>
-            <p class="microcopy">Clips can also be placed at absolute global beats on a timeline with play, pause, skip and loop regions in the core model.</p>
-          </div>
-          <div class="button-row">
-            <button id="btnExportComposedSoundscapes" type="button">EXPORT SOUNDSCAPE PRESETS</button>
-          </div>
-          <textarea id="composedSoundscapePresetJson" class="mini-input" rows="6" placeholder="composed source/effect/automation preset bank JSON"></textarea>
-        </div>
-
-        <div class="session-panel project-io-panel">
-          <h2>Project I/O</h2>
-          <label class="microcopy" for="projectExportMode">Export mode</label>
-          <select id="projectExportMode" class="mini-input" aria-label="Project export mode">
-            <option value="just-project">just-project · no samples</option>
-            <option value="inline-samples-project">inline-samples-project · JSON with b64 samples</option>
-            <option value="project-archive">project archive · ZIP with JSON + WAV samples</option>
-            <option value="project-replaced">project-replaced · placeholder synths</option>
-          </select>
-          <textarea id="projectIoText" class="mini-input" rows="7" placeholder="copy/export JSON appears here; paste/import JSON here"></textarea>
-          <input id="projectImportFile" class="mini-input" type="file" accept="application/json,.json,application/zip,.zip">
-          <div class="button-row">
-            <button id="btnCopyProject" type="button">COPY</button>
-            <button id="btnPasteProject" type="button">PASTE / IMPORT</button>
-            <button id="btnDownloadProject" type="button">DOWNLOAD</button>
-          </div>
-          <p class="microcopy">Choose no samples, inline b64 samples, ZIP archive, or placeholder synth/drum-machine replacement.</p>
-        </div>
-
-        <div class="session-panel example-projects-panel">
-          <h2>Example Sets</h2>
-          <select id="exampleProjectSelect" class="mini-input" aria-label="Example project set">
-            <option value="">load tutorial example…</option>
+        <details class="sidebar-drawer">
+          <summary>Examples</summary>
+          <select id="exampleProjectSelect" class="mini-input" aria-label="Example project">
+            <option value="">load example…</option>
           </select>
           <div class="button-row">
-            <button id="btnLoadExampleProject" type="button">LOAD EXAMPLE</button>
+            <button id="btnLoadExampleProject" type="button">LOAD</button>
             <button id="btnStageExampleProject" type="button">STAGE JSON</button>
           </div>
-          <p class="microcopy">Original, royalty-free study rigs inspired by Detroit swing workflows. Stage JSON to inspect/import manually, or load directly into the rack.</p>
-        </div>
+        </details>
+
+        <!-- hidden elements kept for JS compatibility and static feature contracts -->
+        <div id="automationOperatorPanel" class="hidden-compat" aria-hidden="true"></div>
+        <div id="clipSessionPanel" class="hidden-compat" aria-hidden="true"></div>
+        <div id="arrangementTimelinePanel" class="hidden-compat" aria-hidden="true"></div>
+        <textarea id="composedSoundscapePresetJson" class="hidden-compat" rows="1"></textarea>
+        <button id="btnExportComposedSoundscapes" class="hidden-compat" type="button">EXPORT</button>
       </aside>
 
       <section class="panel rack">
         <div class="workspace-view-shell">
           <div class="workspace-tabs" role="tablist" aria-label="DAW workspace views">
             <button class="workspace-tab active" data-workspace-view="session" type="button">Session</button>
+            <button class="workspace-tab" data-workspace-view="chains" type="button">Chains</button>
             <button class="workspace-tab" data-workspace-view="clips" type="button">Clips</button>
-            <button class="workspace-tab" data-workspace-view="arrangement" type="button">Arrangement</button>
+            <button class="workspace-tab" data-workspace-view="arrangement" type="button">Arrange</button>
             <button class="workspace-tab" data-workspace-view="mixer" type="button">Mixer</button>
             <button class="workspace-tab" data-workspace-view="module" type="button">Module</button>
-            <button id="btnWorkspaceReset" class="workspace-reset" type="button" title="Return to session view">Reset View</button>
+            <button id="btnWorkspaceReset" class="workspace-reset" type="button" title="Return to session view">Reset</button>
           </div>
           <div id="workspaceMainView" class="workspace-main-view" aria-live="polite"></div>
         </div>
 
         <div class="patch-canvas-container">
           <div class="patch-canvas-header">
-            <h2>Visual Patch Canvas</h2>
+            <h2>Patch Canvas</h2>
             <div class="patch-controls">
               <button id="btnAutoPatch" title="Auto-patch new modules">Auto-patch</button>
-              <button id="btnClearRoutes" title="Clear all routes">Clear Routes</button>
+              <button id="btnClearRoutes" title="Clear all routes">Clear</button>
             </div>
           </div>
           <div class="patch-canvas-host" id="patchCanvas"></div>
@@ -222,26 +196,34 @@
       </section>
 
       <aside class="panel inspector resizable-mixer">
-        <h2>Master Mixer</h2>
+        <h2>Mixer / Routes</h2>
         <div class="mixer-strip" id="mixerStrip"></div>
 
-        <h2>Active Routes</h2>
         <div class="routes-container">
           <ol class="routes" id="routes"></ol>
         </div>
 
         <h2>Packet Monitor</h2>
         <div class="event-log" id="eventLog"></div>
-
-        <div class="inspector-footer">
-          <p class="microcopy">Right-click modules for context menu. Drag ports to create routes. Alt+click to delete routes.</p>
-        </div>
       </aside>
     </section>
 
-    <footer class="footer">
-      <span>V11 Peer DAW · modular audio workstation · peer-to-peer collaboration</span>
-      <a href="./docs/ARCHITECTURE.md">architecture docs</a>
+    <footer class="transport-bar">
+      <div class="transport-beat">
+        <span class="beat-pulse" id="beatPulse"></span>
+        <span class="beat-display" id="beatDisplay">1.1</span>
+      </div>
+      <div class="transport-bpm">
+        <span id="transportBpm">120</span> BPM
+      </div>
+      <div class="transport-time">
+        <span id="transportTime">0:00</span>
+      </div>
+      <div class="transport-stats">
+        <span id="transportModules">0 modules</span>
+        <span id="transportRoutes">0 routes</span>
+      </div>
+      <a class="transport-docs" href="./docs/ARCHITECTURE.md">docs</a>
     </footer>
   </main>
 

@@ -218,7 +218,11 @@ describe('synth modules', () => {
 
   test('analog subtractive synth exposes oscillator mixer, filter, envelope, and drive', async () => {
     const ctx = new FakeAudioContext();
-    const synth = new SubtractiveAnalogSynthModule({ id: 'analog-test', cutoff: 1400, resonance: 8 });
+    const synth = new SubtractiveAnalogSynthModule({
+      id: 'analog-test',
+      cutoff: 1400,
+      resonance: 8,
+    });
     await synth.start(ctx);
 
     synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'A4', velocity: 0.8 });
@@ -241,7 +245,12 @@ describe('synth modules', () => {
 
   test('FM/phase modulation synth connects modulator depth to carrier frequency and serializes ratios', async () => {
     const ctx = new FakeAudioContext();
-    const synth = new FmPhaseSynthModule({ id: 'fm-test', carrierRatio: 1, modulatorRatio: 2, modulationIndex: 4 });
+    const synth = new FmPhaseSynthModule({
+      id: 'fm-test',
+      carrierRatio: 1,
+      modulatorRatio: 2,
+      modulationIndex: 4,
+    });
     await synth.start(ctx);
 
     synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'C4', velocity: 0.6 });
@@ -264,7 +273,11 @@ describe('synth modules', () => {
 
   test('wavetable synth builds periodic waves, morphs tables, and serializes table state', async () => {
     const ctx = new FakeAudioContext();
-    const synth = new WavetableSynthModule({ id: 'wavetable-test', wavetable: 'bright', morph: 0.75 });
+    const synth = new WavetableSynthModule({
+      id: 'wavetable-test',
+      wavetable: 'bright',
+      morph: 0.75,
+    });
     await synth.start(ctx);
 
     synth.receive({ kind: PortType.MIDI, type: 'note-on', note: 'G4', velocity: 0.7 });

@@ -21,7 +21,20 @@ const NOTE_TO_PC = Object.freeze({
   B: 11,
 });
 
-const PC_TO_SHARP = Object.freeze(['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']);
+const PC_TO_SHARP = Object.freeze([
+  'C',
+  'C#',
+  'D',
+  'D#',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'G#',
+  'A',
+  'A#',
+  'B',
+]);
 
 export const SCALE_INTERVALS = Object.freeze({
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -134,7 +147,7 @@ function parseRomanSymbol(symbol = 'I') {
   const degree = ROMAN[numeral];
   if (degree === undefined) throw new Error(`Unsupported roman numeral: ${symbol}`);
   const accidentalOffset = accidental === 'b' ? -1 : accidental === '#' ? 1 : 0;
-  let suffix = suffixRaw || '';
+  const suffix = suffixRaw || '';
   const isLowercase = numeralRaw === numeralRaw.toLowerCase();
   let quality = '';
   if (suffix) quality = isLowercase && /^[679]|^11|^13/.test(suffix) ? `m${suffix}` : suffix;
@@ -171,7 +184,12 @@ export function generateChordProgression({
   let previousNotes = null;
   return progression.map((symbol, index) => {
     const parsed = parseRomanSymbol(symbol);
-    const chordRoot = scaleDegreeRoot({ root, scale, degree: parsed.degree, accidentalOffset: parsed.accidentalOffset });
+    const chordRoot = scaleDegreeRoot({
+      root,
+      scale,
+      degree: parsed.degree,
+      accidentalOffset: parsed.accidentalOffset,
+    });
     let notes = buildChord({ root: chordRoot, quality: parsed.quality });
     if (voiceLead) notes = chooseVoiceLeadingInversion(previousNotes, notes);
     previousNotes = notes;
@@ -217,8 +235,13 @@ export function applyHarmonicProgression(motif = [], options = {}) {
   const progression = generateChordProgression(options);
   const beatsPerChord = Number(options.beatsPerChord ?? 4);
   return progression.flatMap((chord) => {
-    const local = transposePatternToScaleDegree(motif, { root: chord.root, scale: options.scale || 'major' });
-    return local.map((event) => ({ ...event, beat: event.beat + chord.beat })).filter((event) => event.beat < chord.beat + beatsPerChord);
+    const local = transposePatternToScaleDegree(motif, {
+      root: chord.root,
+      scale: options.scale || 'major',
+    });
+    return local
+      .map((event) => ({ ...event, beat: event.beat + chord.beat }))
+      .filter((event) => event.beat < chord.beat + beatsPerChord);
   });
 }
 
@@ -235,12 +258,20 @@ export function harmonizeExistingPattern(pattern = [], { intervals = [0, 4, 7] }
 
 export function applySyncopation(
   pattern = [],
-  { offsetEvery = 2, offsetBeats = -0.25, accentEvery = 3, ghostEvery = 0, accentGain = 1.2, ghostGain = 0.4 } = {}
+  {
+    offsetEvery = 2,
+    offsetBeats = -0.25,
+    accentEvery = 3,
+    ghostEvery = 0,
+    accentGain = 1.2,
+    ghostGain = 0.4,
+  } = {}
 ) {
   return pattern.map((event, index) => {
     const position = index + 1;
     const shouldOffset = offsetEvery > 0 && position % offsetEvery === 0;
-    const shouldAccent = accentEvery > 0 && (index % accentEvery === 0 || position % accentEvery === 0);
+    const shouldAccent =
+      accentEvery > 0 && (index % accentEvery === 0 || position % accentEvery === 0);
     const shouldGhost = ghostEvery > 0 && position % ghostEvery === 0;
     const gain = shouldGhost ? ghostGain : shouldAccent ? accentGain : 1;
     return {
@@ -265,7 +296,11 @@ export function createTheoryPattern(pattern = {}) {
     );
   }
   if (pattern.kind === 'scale') {
-    return generateScale({ root: pattern.root, scale: pattern.scale, octaves: pattern.octaves }).map((note, index) => ({
+    return generateScale({
+      root: pattern.root,
+      scale: pattern.scale,
+      octaves: pattern.octaves,
+    }).map((note, index) => ({
       beat: index * (pattern.stepBeats ?? 0.5),
       note,
       velocity: pattern.velocity ?? 0.75,
@@ -284,5 +319,8 @@ export function createTheoryPattern(pattern = {}) {
 }
 
 export function patternLengthBeats(notes = []) {
-  return notes.reduce((max, note) => Math.max(max, Number(note.beat || 0) + Number(note.duration || 0)), 0);
+  return notes.reduce(
+    (max, note) => Math.max(max, Number(note.beat || 0) + Number(note.duration || 0)),
+    0
+  );
 }

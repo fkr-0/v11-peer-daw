@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/mixer.js
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 export class MixerModule extends ModuleBase {
   constructor(runtime, config = {}) {
@@ -24,7 +25,7 @@ export class MixerModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>▤</span><strong>${this.title}</strong><small>AUDIO SUM</small></div>
+      <div class="module-head"><span>▤</span><strong>${escapeHtml(this.title)}</strong><small>AUDIO SUM</small></div>
       <label>Master <input type="range" min="0" max="100" value="80" class="mini-input"></label>
       <p class="microcopy">Default sum bus. Submix modules may coexist and feed this master.</p>
     `;

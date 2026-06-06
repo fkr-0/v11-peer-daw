@@ -41,7 +41,11 @@ export class AutomationOperator {
     if (this.type === 'step') return Number(this.value ?? fallback);
     const duration = Math.max(0.000001, this.endBeat - this.startBeat);
     const t = clamp((beat - this.startBeat) / duration, 0, 1);
-    if (this.type === 'linear') return round(Number(this.from ?? fallback) + (Number(this.to ?? fallback) - Number(this.from ?? fallback)) * t);
+    if (this.type === 'linear')
+      return round(
+        Number(this.from ?? fallback) +
+          (Number(this.to ?? fallback) - Number(this.from ?? fallback)) * t
+      );
     if (this.type === 'lfo') {
       const min = Number(this.min ?? 0);
       const max = Number(this.max ?? 1);
@@ -245,7 +249,9 @@ export class Arrangement {
   }
 
   eventsAt(beat = 0) {
-    return this.activeClipsAt(beat).flatMap(({ clip, startBeat }) => clip.eventsAt(beat, startBeat));
+    return this.activeClipsAt(beat).flatMap(({ clip, startBeat }) =>
+      clip.eventsAt(beat, startBeat)
+    );
   }
 
   transportPositionAfter(beat = 0, { loop = false } = {}) {
@@ -258,7 +264,11 @@ export class Arrangement {
     return {
       loopStartBeat: this.loopStartBeat,
       loopEndBeat: this.loopEndBeat,
-      clips: this.clips.map(({ clip, startBeat, trackId }) => ({ clip: clip.serialize(), startBeat, trackId })),
+      clips: this.clips.map(({ clip, startBeat, trackId }) => ({
+        clip: clip.serialize(),
+        startBeat,
+        trackId,
+      })),
     };
   }
 }

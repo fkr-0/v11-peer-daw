@@ -63,14 +63,24 @@ describe('progressions and piano-roll application', () => {
 
     expect(progression.map((chord) => chord.symbol)).toEqual(['Imaj7', 'vi7', 'ii9', 'V13']);
     expect(progression[0]).toEqual(
-      expect.objectContaining({ root: 'C3', quality: 'maj7', beat: 0, notes: ['C3', 'E3', 'G3', 'B3'] })
+      expect.objectContaining({
+        root: 'C3',
+        quality: 'maj7',
+        beat: 0,
+        notes: ['C3', 'E3', 'G3', 'B3'],
+      })
     );
     expect(progression[1].notes).toEqual(['E4', 'G4', 'A4', 'C5']);
     expect(progression[3].notes).toContain('E5');
   });
 
   test('converts progressions to piano-roll note events', () => {
-    const progression = generateChordProgression({ root: 'A2', scale: 'minor', progression: ['i7', 'VImaj7'], beatsPerChord: 4 });
+    const progression = generateChordProgression({
+      root: 'A2',
+      scale: 'minor',
+      progression: ['i7', 'VImaj7'],
+      beatsPerChord: 4,
+    });
     const notes = patternToPianoRollNotes(progression, { velocity: 0.72, duration: 3.5 });
 
     expect(notes.slice(0, 4)).toEqual([
@@ -132,7 +142,14 @@ describe('progressions and piano-roll application', () => {
       { beat: 3, note: 'G4', velocity: 0.8, duration: 0.5 },
     ];
 
-    expect(applySyncopation(pattern, { offsetEvery: 2, offsetBeats: -0.25, accentEvery: 3, ghostEvery: 4 })).toEqual([
+    expect(
+      applySyncopation(pattern, {
+        offsetEvery: 2,
+        offsetBeats: -0.25,
+        accentEvery: 3,
+        ghostEvery: 4,
+      })
+    ).toEqual([
       { beat: 0, note: 'C4', velocity: 0.96, duration: 0.5 },
       { beat: 0.75, note: 'D4', velocity: 0.8, duration: 0.5 },
       { beat: 2, note: 'E4', velocity: 0.96, duration: 0.5 },
@@ -159,7 +176,9 @@ describe('PianoRollModule integration', () => {
       },
     });
 
-    expect(roll.notes.map(({ beat, note, velocity, duration }) => ({ beat, note, velocity, duration }))).toEqual([
+    expect(
+      roll.notes.map(({ beat, note, velocity, duration }) => ({ beat, note, velocity, duration }))
+    ).toEqual([
       { beat: 0, note: 'C3', velocity: 0.66, duration: 1.75 },
       { beat: 0, note: 'E3', velocity: 0.66, duration: 1.75 },
       { beat: 0, note: 'G3', velocity: 0.66, duration: 1.75 },

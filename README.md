@@ -166,8 +166,10 @@ dist/
 Every module implements:
 
 ```javascript
-class ModuleBase extends ModuleBase {
-  constructor(config) {
+import { ModuleBase, PortType } from './src/core/contracts.js';
+
+class ExampleModule extends ModuleBase {
+  constructor(config = {}) {
     super({
       id: 'unique-id',
       title: 'Module Name',

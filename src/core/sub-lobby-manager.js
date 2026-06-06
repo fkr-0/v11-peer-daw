@@ -15,7 +15,11 @@ function createEmitter() {
   return {
     on(type, fn) {
       listeners.set(type, [...(listeners.get(type) || []), fn]);
-      return () => listeners.set(type, (listeners.get(type) || []).filter((item) => item !== fn));
+      return () =>
+        listeners.set(
+          type,
+          (listeners.get(type) || []).filter((item) => item !== fn)
+        );
     },
     emit(type, payload) {
       for (const fn of listeners.get(type) || []) fn(payload);
@@ -132,7 +136,11 @@ export class SubLobbyManager {
     });
     lobby.addEventListener?.('peers', (event) => {
       this.state.peers = normalizePeers(event.detail);
-      if (this.autoCreateWhenAlone && this.state.role === 'hub-visible' && this.state.peers.size === 0) {
+      if (
+        this.autoCreateWhenAlone &&
+        this.state.role === 'hub-visible' &&
+        this.state.peers.size === 0
+      ) {
         this.createHostedSubLobby({ carryCurrentProject: true });
       }
       if (this.state.role === 'host' && this.state.subLobbyId && this.state.peers.size > 0) {
@@ -164,7 +172,9 @@ export class SubLobbyManager {
   async createHostedSubLobby({ carryCurrentProject = true, subLobbyId = '' } = {}) {
     const nextId = subLobbyId || `${this.subLobbyPrefix}-${this.randomId()}`;
     await this.replaceSubLobby(nextId, 'host');
-    this.state.lastDecision = carryCurrentProject ? 'hosted-with-current-project' : 'hosted-new-project';
+    this.state.lastDecision = carryCurrentProject
+      ? 'hosted-with-current-project'
+      : 'hosted-new-project';
     this.advertiseCurrentSubLobby({ carryCurrentProject });
     return this.state;
   }
@@ -220,7 +230,10 @@ export class SubLobbyManager {
     });
   }
 
-  publishProjectChange(project = safeProjectSnapshot(this.projectProvider), reason = 'local-change') {
+  publishProjectChange(
+    project = safeProjectSnapshot(this.projectProvider),
+    reason = 'local-change'
+  ) {
     if (!this.subLobby || !this.state.subLobbyId || !project) return false;
     this.subLobby.broadcast({
       type: SUB_LOBBY_PACKET_TYPES.projectUpdate,

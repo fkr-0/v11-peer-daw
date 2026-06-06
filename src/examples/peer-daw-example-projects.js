@@ -4,7 +4,6 @@
 
 const MIDI = 'midi';
 const CONTROL = 'control';
-const CLOCK = 'clock';
 
 const route = (fromModuleId, outputId, toModuleId, inputId) => ({
   from: { moduleId: fromModuleId, outputId },
@@ -221,7 +220,12 @@ export const peerDawExampleProjects = Object.freeze([
           note('d-k9', 15.25, 'C1', 0.5, 0.06),
         ],
       },
-      { id: 'fil-drums', moduleType: 'drumsynth', kind: 'audio-generator', title: 'Soft Clip Drum Synth' },
+      {
+        id: 'fil-drums',
+        moduleType: 'drumsynth',
+        kind: 'audio-generator',
+        title: 'Soft Clip Drum Synth',
+      },
       {
         id: 'fil-chord-roll',
         moduleType: 'pianoroll',

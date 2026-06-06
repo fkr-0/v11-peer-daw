@@ -2,6 +2,7 @@
 // OCRA/ORCA-inspired autonomous grid: emits midi-like control and owns a tiny submixer for click voices.
 
 import { ModuleBase, PortType, createMidiPacket, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 export class OcraGridModule extends ModuleBase {
   constructor(config = {}) {
@@ -91,7 +92,7 @@ export class OcraGridModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>▧</span><strong>${this.title}</strong><small>CLOCK IN / MIDI + SUBMIX AUDIO OUT</small></div>
+      <div class="module-head"><span>▧</span><strong>${escapeHtml(this.title)}</strong><small>CLOCK IN / MIDI + SUBMIX AUDIO OUT</small></div>
       <div class="ocra-grid" spellcheck="false">
         ${this.rows.map((row, idx) => `<input data-row="${idx}" value="${row}">`).join('')}
       </div>

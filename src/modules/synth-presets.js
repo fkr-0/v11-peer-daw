@@ -2,7 +2,13 @@
 // JSON-safe default/import/export synth preset bank.
 
 function uniqueStrings(values = []) {
-  return [...new Set(Array.from(values).map((value) => String(value).trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      Array.from(values)
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 export function normalizeSynthPreset(preset = {}) {
@@ -67,7 +73,14 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     category: 'typical',
     description: 'Hollow wavetable pad with a restrained low-pass for airy chords.',
     tags: ['pad', 'choir', 'wavetable'],
-    params: { wavetable: 'hollow', morph: 0.38, tableSize: 48, cutoff: 3600, attack: 0.12, release: 1.1 },
+    params: {
+      wavetable: 'hollow',
+      morph: 0.38,
+      tableSize: 48,
+      cutoff: 3600,
+      attack: 0.12,
+      release: 1.1,
+    },
   }),
   normalizeSynthPreset({
     synth: 'fmsynth',
@@ -91,7 +104,8 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     slug: 'br-inspired-cs80-brass',
     title: 'Blade Runner Inspired CS Brass',
     category: 'vangelis-bladerunner',
-    description: 'Expressive cinematic brass lead/pad inspired by late-70s analog soundtrack colors.',
+    description:
+      'Expressive cinematic brass lead/pad inspired by late-70s analog soundtrack colors.',
     tags: ['cinematic', 'brass', 'vangelis-inspired', 'blade-runner-inspired'],
     params: {
       oscillatorMix: { saw: 0.72, square: 0.42, sub: 0.08 },
@@ -112,7 +126,14 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     category: 'vangelis-bladerunner',
     description: 'Damp, glassy wavetable pad for neon-rain ambience.',
     tags: ['cinematic', 'pad', 'ambient', 'blade-runner-inspired'],
-    params: { wavetable: 'glass', morph: 0.55, tableSize: 64, cutoff: 3100, attack: 0.25, release: 2.2 },
+    params: {
+      wavetable: 'glass',
+      morph: 0.55,
+      tableSize: 64,
+      cutoff: 3100,
+      attack: 0.25,
+      release: 2.2,
+    },
   }),
   normalizeSynthPreset({
     synth: 'analogsynth',
@@ -174,7 +195,14 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     category: 'experimental',
     description: 'Brittle bright wavetable for crackle, sparks, ice, and broken-radio textures.',
     tags: ['noise', 'crackle', 'texture', 'wavetable'],
-    params: { wavetable: 'bright', morph: 0.97, tableSize: 16, cutoff: 10800, attack: 0.001, release: 0.035 },
+    params: {
+      wavetable: 'bright',
+      morph: 0.97,
+      tableSize: 16,
+      cutoff: 10800,
+      attack: 0.001,
+      release: 0.035,
+    },
   }),
   normalizeSynthPreset({
     synth: 'wavetablesynth',
@@ -183,7 +211,14 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     category: 'experimental',
     description: 'Glassy plink for water drops and tiny resonant droplets.',
     tags: ['water', 'drop', 'plink', 'sfx'],
-    params: { wavetable: 'glass', morph: 0.88, tableSize: 64, cutoff: 7600, attack: 0.001, release: 0.28 },
+    params: {
+      wavetable: 'glass',
+      morph: 0.88,
+      tableSize: 64,
+      cutoff: 7600,
+      attack: 0.001,
+      release: 0.28,
+    },
   }),
   normalizeSynthPreset({
     synth: 'wavetablesynth',
@@ -192,7 +227,14 @@ export const DEFAULT_SYNTH_PRESETS = Object.freeze([
     category: 'experimental',
     description: 'Vintage lab-equipment sci-fi bleeps, whines, and unstable oscillator colors.',
     tags: ['early-sci-fi', 'bleep', 'noise', 'retro'],
-    params: { wavetable: 'hollow', morph: 0.82, tableSize: 24, cutoff: 9200, attack: 0.004, release: 0.16 },
+    params: {
+      wavetable: 'hollow',
+      morph: 0.82,
+      tableSize: 24,
+      cutoff: 9200,
+      attack: 0.004,
+      release: 0.16,
+    },
   }),
 ]);
 

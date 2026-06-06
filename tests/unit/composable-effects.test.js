@@ -88,24 +88,33 @@ const composableEffectCases = [
 ];
 
 describe('composable effect modules', () => {
-  test.each(composableEffectCases)('%s exposes audio input/output and can be chained', async (_key, EffectClass) => {
-    const ctx = new FakeAudioContext();
-    const effect = new EffectClass({ id: `${_key}-test` });
-    const destination = new FakeNode('destination');
+  test.each(composableEffectCases)(
+    '%s exposes audio input/output and can be chained',
+    async (_key, EffectClass) => {
+      const ctx = new FakeAudioContext();
+      const effect = new EffectClass({ id: `${_key}-test` });
+      const destination = new FakeNode('destination');
 
-    await effect.start(ctx);
-    effect.connectAudio(destination);
+      await effect.start(ctx);
+      effect.connectAudio(destination);
 
-    expect(effect.kind).toBe('audio-effect');
-    expect(effect.inputs).toEqual(expect.arrayContaining([{ id: 'audio', type: PortType.AUDIO }]));
-    expect(effect.outputs).toEqual([{ id: 'audio', type: PortType.AUDIO }]);
-    expect(effect.input).toBeTruthy();
-    expect(effect.output).toBeTruthy();
-    expect(effect.output.connections).toContain(destination);
-    expect(effect.serialize()).toEqual(
-      expect.objectContaining({ id: `${_key}-test`, kind: 'audio-effect', params: expect.any(Object) })
-    );
-  });
+      expect(effect.kind).toBe('audio-effect');
+      expect(effect.inputs).toEqual(
+        expect.arrayContaining([{ id: 'audio', type: PortType.AUDIO }])
+      );
+      expect(effect.outputs).toEqual([{ id: 'audio', type: PortType.AUDIO }]);
+      expect(effect.input).toBeTruthy();
+      expect(effect.output).toBeTruthy();
+      expect(effect.output.connections).toContain(destination);
+      expect(effect.serialize()).toEqual(
+        expect.objectContaining({
+          id: `${_key}-test`,
+          kind: 'audio-effect',
+          params: expect.any(Object),
+        })
+      );
+    }
+  );
 
   test('new effects are exposed by the module catalog', () => {
     for (const key of ['delay', 'beatrepeat', 'graindelay', 'pitchshift']) {

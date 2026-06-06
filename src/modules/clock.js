@@ -1,6 +1,7 @@
 // PeerModGroove/src/modules/clock.js
 
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 
 export class ClockModule extends ModuleBase {
   constructor(config = {}) {
@@ -14,13 +15,22 @@ export class ClockModule extends ModuleBase {
     this.bpm = config.bpm || 120;
     this.step = 0;
     this.timer = null;
+    this._running = false;
   }
 
   start(context) {
     this.ctx = context;
     this.stop();
+    this.step = 0;
+    this._running = true;
+    this._scheduleTick();
+    this.root?.classList.add('running');
+  }
+
+  _scheduleTick() {
+    if (!this._running) return;
     const interval = (60 / this.bpm / 4) * 1000;
-    this.timer = setInterval(() => {
+    this.timer = setTimeout(() => {
       this.emitPacket(
         {
           kind: PortType.CLOCK,
@@ -31,12 +41,13 @@ export class ClockModule extends ModuleBase {
         },
         'clock'
       );
+      this._scheduleTick();
     }, interval);
-    this.root?.classList.add('running');
   }
 
   stop() {
-    if (this.timer) clearInterval(this.timer);
+    this._running = false;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.root?.classList.remove('running');
   }
@@ -57,12 +68,12 @@ export class ClockModule extends ModuleBase {
   render() {
     if (!this.root) return;
     this.root.innerHTML = `
-      <div class="module-head"><span>⏱</span><strong>${this.title}</strong><small>CLOCK OUT</small></div>
+      <div class="module-head"><span>⏱</span><strong>${escapeHtml(this.title)}</strong><small>CLOCK OUT</small></div>
       <label>BPM <input class="mini-input" type="number" min="40" max="260" value="${this.bpm}"></label>
-      <p class="microcopy">No input required. Emits transport step packets.</p>
+      <p class="microcopy">${this._running ? 'running' : 'stopped'} · emits transport step packets</p>
     `;
-    this.root.querySelector('input').addEventListener('change', (e) => {
-      this.bpm = Number(e.target.value) || 120;
+    this.root.querySelector('input').addEventListener('input', (e) => {
+      this.bpm = Math.max(40, Math.min(260, Number(e.target.value) || 120));
     });
   }
 }

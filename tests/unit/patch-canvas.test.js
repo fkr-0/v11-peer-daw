@@ -24,6 +24,28 @@ describe('PatchCanvas', () => {
     ]);
   });
 
+  test('serializes and restores canvas node positions', () => {
+    const root = inertRoot();
+    const graph = {
+      serialize() {
+        return {
+          nodes: [{ id: 'source', title: 'Source' }],
+          edges: [],
+          chains: [],
+        };
+      },
+    };
+    const canvas = new PatchCanvas(root, graph);
+    canvas.render();
+    canvas.positions.set('source', { x: 123, y: 234 });
+
+    expect(canvas.serializePositions()).toEqual({ source: { x: 123, y: 234 } });
+
+    const restored = new PatchCanvas(root, graph);
+    restored.restorePositions({ source: { x: 456, y: 567 } });
+    expect(restored.serializePositions()).toEqual({ source: { x: 456, y: 567 } });
+  });
+
   test('renders positioned nodes and svg edge paths for canvas styling', () => {
     const root = inertRoot();
     const graph = {

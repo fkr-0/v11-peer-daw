@@ -1,5 +1,6 @@
 // PeerModGroove/src/modules/multisampler.js
 import { ModuleBase, PortType, uid } from '../core/contracts.js';
+import { escapeHtml } from '../core/html.js';
 import { packetAudioTime } from '../core/scheduler.js';
 
 export class MultiSamplerModule extends ModuleBase {
@@ -160,17 +161,30 @@ export class MultiSamplerModule extends ModuleBase {
       this.zones
         .map(
           (z, i) =>
-            `<div class="zone-row" data-zone="${i}"><strong>${z.name}</strong><small>${this.noteName(z.min)}–${this.noteName(z.max)} root ${z.rootNote}</small><div class="waveform">${this.renderWaveform(z)}</div><label>min <input class="mini-input" data-min type="text" value="${this.noteName(z.min)}"></label><label>max <input class="mini-input" data-max type="text" value="${this.noteName(z.max)}"></label><label>root <input class="mini-input" data-root type="text" value="${z.rootNote}"></label></div>`
+            `<div class="zone-row" data-zone="${i}"><strong>${escapeHtml(z.name)}</strong><small>${this.noteName(z.min)}–${this.noteName(z.max)} root ${escapeHtml(z.rootNote)}</small><div class="waveform">${this.renderWaveform(z)}</div><label>min <input class="mini-input" data-min type="text" value="${this.noteName(z.min)}"></label><label>max <input class="mini-input" data-max type="text" value="${this.noteName(z.max)}"></label><label>root <input class="mini-input" data-root type="text" value="${escapeHtml(z.rootNote)}"></label></div>`
         )
         .join('') || '<p class="microcopy">No samples loaded yet.</p>';
-    this.root.innerHTML = `<div class="module-head"><span>▣</span><strong>${this.title}</strong><small>MIDI IN / SLICED AUDIO OUT</small></div><div class="drop-zone">${this.fileName}</div><input type="file" accept="audio/*" class="file-input" multiple><label>Slices <input class="mini-input" type="number" min="1" max="32" value="${this.sliceCount}" data-slices></label><div class="sampler-zones">${zoneRows}</div><p class="microcopy">Multiple files create multisample zones. packet.slice triggers slice playback.</p>`;
-    this.root
-      .querySelector('input[type=file]')
-      .addEventListener('change', (e) =>
-        [...e.target.files].forEach((file, i) =>
-          this.loadFile(file, 'C4', i ? 'C4' : 'C1', i ? 'C7' : 'B3')
-        )
+    this.root.innerHTML = `<div class="module-head"><span>▣</span><strong>${escapeHtml(this.title)}</strong><small>MIDI IN / SLICED AUDIO OUT</small></div><div class="drop-zone ${this.zones.some((z) => z.buffer) ? 'sample-loaded' : ''}" tabindex="0">${escapeHtml(this.fileName)}</div><input type="file" accept="audio/*" class="file-input" multiple><label>Slices <input class="mini-input" type="number" min="1" max="32" value="${this.sliceCount}" data-slices></label><div class="sampler-zones">${zoneRows}</div><p class="microcopy">Multiple files create multisample zones. packet.slice triggers slice playback.</p>`;
+    const fileInput = this.root.querySelector('input[type=file]');
+    const dropZone = this.root.querySelector('.drop-zone');
+    fileInput.addEventListener('change', (e) =>
+      [...e.target.files].forEach((file, i) =>
+        this.loadFile(file, 'C4', i ? 'C4' : 'C1', i ? 'C7' : 'B3')
+      )
+    );
+    dropZone?.addEventListener('click', () => fileInput.click());
+    dropZone?.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('hot');
+    });
+    dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('hot'));
+    dropZone?.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('hot');
+      [...(e.dataTransfer.files || [])].forEach((file, i) =>
+        this.loadFile(file, 'C4', i ? 'C4' : 'C1', i ? 'C7' : 'B3')
       );
+    });
     this.root
       .querySelector('[data-slices]')
       .addEventListener('input', (e) => (this.sliceCount = Number(e.target.value) || 8));

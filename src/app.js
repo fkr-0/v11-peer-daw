@@ -1,12 +1,21 @@
 // V11 Peer DAW/src/app.js
 // Main application module
 
+import { PeernetLobby } from '../../peernetjs/peernet-lib.js';
 import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
 import { Arrangement, Clip, ClipSlot } from './core/clips-arrangement.js';
 import { PortType } from './core/contracts.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
+import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
+import {
+  createProjectSource,
+  serializeClipState as serializeClipStateSnapshot,
+  serializeMixerState as serializeMixerStateSnapshot,
+  serializeRig as serializeRigSnapshot,
+} from './core/project-state.js';
+import { RoutingGraph } from './core/routing-graph.js';
 import {
   SAMPLE_PACKET_TYPES,
   SampleLibrary,
@@ -15,12 +24,18 @@ import {
   normalizeSampleMetadata,
 } from './core/sample-library.js';
 import { SubLobbyManager } from './core/sub-lobby-manager.js';
-import { PeernetLobby } from '../../peernetjs/peernet-lib.js';
-import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
-import { RoutingGraph } from './core/routing-graph.js';
-import { clonePeerDawExampleProject, peerDawExampleProjects } from './examples/peer-daw-example-projects.js';
+import { WorkspacePreferences } from './core/workspace-preferences.js';
+import {
+  clonePeerDawExampleProject,
+  peerDawExampleProjects,
+} from './examples/peer-daw-example-projects.js';
 import { createDefaultPeerDawRig, moduleFactories } from './modules/catalog.js';
+import { exportComposedPresetBankJson } from './modules/composed-soundscape-presets.js';
 import { PatchCanvas } from './ui/patch-canvas.js';
+import {
+  renderProjectSampleUsageHtml,
+  renderSampleLibraryTreeHtml,
+} from './ui/sample-panel-renderer.js';
 
 class V11PeerDAW {
   constructor() {
@@ -35,6 +50,7 @@ class V11PeerDAW {
     this.routingGraph = new RoutingGraph();
     this.graphSync = null;
     this.patchCanvas = null;
+    this.workspacePreferences = new WorkspacePreferences();
     this.clock = null;
     this.mixer = null;
     this.focusedModuleId = null;
@@ -53,7 +69,8 @@ class V11PeerDAW {
     this.urlParams = new URLSearchParams(window.location.search);
     this.sessionCode = this.urlParams.get('session') || null;
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
-    this.spectateMode = this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
+    this.spectateMode =
+      this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
     this.defaultSessionCode = this.urlParams.get('session') || 'V11-OPEN-STUDIO';
     this.peerList = [];
     this.workspaceView = 'session';
@@ -67,6 +84,9 @@ class V11PeerDAW {
     this.gridClipboard = [];
     this.waveformEdits = new Map();
     this.arrangementDrag = null;
+    this._renderScheduled = false;
+    this._transportStep = 0;
+    this._transportStartTime = 0;
     this.sampleLibrary = new SampleLibrary();
     this.sampleSyncProgress = new Map();
     this.sampleSync = new SampleSyncManager({
@@ -87,6 +107,8 @@ class V11PeerDAW {
     this.createStarfield();
     this.bindExampleProjects();
     this.bindChrome();
+    this.bindModuleSearch();
+    this.bindTransportBar();
     this.patchBay.addEventListener('packet', (e) => this.logPacket(e.detail));
     this.patchBay.addEventListener('route:add', () => this.renderRoutes());
     this.bindPatchCanvas();
@@ -96,7 +118,9 @@ class V11PeerDAW {
     this.sampleLibrary.load();
     this.bindSampleLibrary();
     this.renderSamplePanels();
+    this.restoreDrawerStates();
     this.bindWorkspaceViews();
+    this.restoreWorkspaceView();
     this.renderWorkspaceView();
     await this.bootstrapDefaultPeernetSession();
     this.bindLocalSessionBus();
@@ -106,7 +130,9 @@ class V11PeerDAW {
   bindLocalSessionBus() {
     if (this.localSessionBus || !('BroadcastChannel' in window)) return;
     this.localSessionBus = new BroadcastChannel(`v11-peer-daw:${this.defaultSessionCode}`);
-    this.localSessionBus.addEventListener('message', (event) => this.handleLocalSessionMessage(event.data || {}));
+    this.localSessionBus.addEventListener('message', (event) =>
+      this.handleLocalSessionMessage(event.data || {})
+    );
     this.announceLocalSessionPresence('join');
     window.addEventListener('beforeunload', () => this.announceLocalSessionPresence('leave'));
   }
@@ -124,10 +150,20 @@ class V11PeerDAW {
   }
 
   handleLocalSessionMessage(message = {}) {
-    if (!message || message.clientId === this.clientId || message.sessionCode !== this.defaultSessionCode) return;
+    if (
+      !message ||
+      message.clientId === this.clientId ||
+      message.sessionCode !== this.defaultSessionCode
+    )
+      return;
     if (message.type === 'presence') {
       if (message.kind === 'leave') this.localSessionPeers.delete(message.clientId);
-      else this.localSessionPeers.set(message.clientId, { id: message.clientId, name: message.username || 'peer', at: message.at || Date.now() });
+      else
+        this.localSessionPeers.set(message.clientId, {
+          id: message.clientId,
+          name: message.username || 'peer',
+          at: message.at || Date.now(),
+        });
       this.updateSessionUI();
       return;
     }
@@ -225,6 +261,27 @@ class V11PeerDAW {
 
     document.querySelector('#btnStop').addEventListener('click', () => {
       this.clock?.stop();
+      this.statusEl.textContent = 'audio: stopped';
+    });
+
+    document.addEventListener('keydown', async (e) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (this.clock?._running) {
+          this.clock.stop();
+          this.statusEl.textContent = 'audio: stopped';
+        } else {
+          try {
+            await this.runtime.init();
+            await this.startAudioModules();
+            this.clock?.start(this.runtime.context);
+            this.statusEl.textContent = `audio: ${this.runtime.context.state}`;
+          } catch (error) {
+            this.logText(`audio start failed: ${error.message}`);
+          }
+        }
+      }
     });
 
     document.querySelector('#btnConnectPeer').addEventListener('click', async () => {
@@ -241,7 +298,9 @@ class V11PeerDAW {
       }
     });
 
-    document.querySelector('#btnWorkspaceReset')?.addEventListener('click', () => this.setWorkspaceView('session'));
+    document
+      .querySelector('#btnWorkspaceReset')
+      ?.addEventListener('click', () => this.setWorkspaceView('session'));
 
     document.querySelector('#btnSaveSnapshot').addEventListener('click', () => {
       const snap = this.peernet.snapshot('Manual V11 Peer DAW Snapshot');
@@ -308,15 +367,19 @@ class V11PeerDAW {
       event.target.value = '';
     });
 
-    document.querySelector('#sampleLibraryUploadFile')?.addEventListener('change', async (event) => {
-      await this.importSampleLibraryFiles(event.target.files || []);
-      event.target.value = '';
-    });
-    document.querySelector('#sampleLibraryImportFile')?.addEventListener('change', async (event) => {
-      const file = event.target.files?.[0];
-      if (file) await this.importSampleLibraryJsonFile(file);
-      event.target.value = '';
-    });
+    document
+      .querySelector('#sampleLibraryUploadFile')
+      ?.addEventListener('change', async (event) => {
+        await this.importSampleLibraryFiles(event.target.files || []);
+        event.target.value = '';
+      });
+    document
+      .querySelector('#sampleLibraryImportFile')
+      ?.addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (file) await this.importSampleLibraryJsonFile(file);
+        event.target.value = '';
+      });
     document
       .querySelector('#btnExportSampleLibrary')
       ?.addEventListener('click', () => this.exportSampleLibraryJson());
@@ -326,10 +389,80 @@ class V11PeerDAW {
     document.querySelector('#sampleLibraryJson')?.addEventListener('change', (event) => {
       const text = event.target.value.trim();
       if (!text) return;
-      this.sampleLibrary.importSnapshot(JSON.parse(text)).save();
-      this.renderSamplePanels();
-      this.logText('global sample library JSON imported');
+      try {
+        this.sampleLibrary.importSnapshot(JSON.parse(text)).save();
+        this.renderSamplePanels();
+        this.logText('global sample library JSON imported');
+      } catch (error) {
+        this.logText(`sample library JSON parse error: ${error.message}`);
+      }
     });
+  }
+
+  bindModuleSearch() {
+    const searchInput = document.querySelector('#moduleSearch');
+    const select = document.querySelector('#addModule');
+    if (!searchInput || !select) return;
+    const allOptions = [...select.querySelectorAll('option[value]:not([value=""])')];
+    const optgroups = [...select.querySelectorAll('optgroup')];
+    searchInput.addEventListener('input', () => {
+      const query = searchInput.value.toLowerCase().trim();
+      if (!query) {
+        allOptions.forEach((opt) => {
+          opt.hidden = false;
+        });
+        optgroups.forEach((og) => {
+          og.hidden = false;
+        });
+        return;
+      }
+      allOptions.forEach((opt) => {
+        opt.hidden = !opt.textContent.toLowerCase().includes(query);
+      });
+      optgroups.forEach((og) => {
+        const visibleChildren = [...og.querySelectorAll('option')].some((opt) => !opt.hidden);
+        og.hidden = !visibleChildren;
+      });
+    });
+  }
+
+  bindTransportBar() {
+    this.patchBay.addEventListener('packet', (e) => {
+      const packet = e.detail?.packet;
+      if (packet?.kind === PortType.CLOCK && packet.type === 'step') {
+        this._transportStep = packet.step;
+        if (packet.step === 0) this._transportStartTime = Date.now();
+        this.updateTransportBar(packet.bpm || 120, packet.step);
+      }
+    });
+  }
+
+  updateTransportBar(bpm, step) {
+    const bar = Math.floor(step / 16) + 1;
+    const beatInBar = Math.floor((step % 16) / 4) + 1;
+    const beatDisplay = document.querySelector('#beatDisplay');
+    const bpmDisplay = document.querySelector('#transportBpm');
+    const timeDisplay = document.querySelector('#transportTime');
+    const pulse = document.querySelector('#beatPulse');
+    if (beatDisplay) beatDisplay.textContent = `${bar}.${beatInBar}`;
+    if (bpmDisplay) bpmDisplay.textContent = String(bpm);
+    if (timeDisplay) {
+      const elapsedMs = Date.now() - this._transportStartTime;
+      const sec = Math.floor(elapsedMs / 1000);
+      const min = Math.floor(sec / 60);
+      timeDisplay.textContent = `${min}:${String(sec % 60).padStart(2, '0')}`;
+    }
+    if (pulse && step % 4 === 0) {
+      pulse.classList.add('on');
+      setTimeout(() => pulse.classList.remove('on'), 100);
+    }
+  }
+
+  updateTransportStats() {
+    const modEl = document.querySelector('#transportModules');
+    const routeEl = document.querySelector('#transportRoutes');
+    if (modEl) modEl.textContent = `${this.patchBay.modules.size} modules`;
+    if (routeEl) routeEl.textContent = `${this.patchBay.routes.length} routes`;
   }
 
   bindWorkspaceViews() {
@@ -345,7 +478,10 @@ class V11PeerDAW {
       }
       const arrangementAction = event.target.closest('[data-arrangement-action]');
       if (arrangementAction) {
-        this.handleArrangementAction(arrangementAction.dataset.arrangementAction, arrangementAction);
+        this.handleArrangementAction(
+          arrangementAction.dataset.arrangementAction,
+          arrangementAction
+        );
         return;
       }
       const moduleAction = event.target.closest('[data-module-action]');
@@ -355,16 +491,33 @@ class V11PeerDAW {
     workspace?.addEventListener('pointermove', (event) => this.handleArrangementPointerMove(event));
     workspace?.addEventListener('pointerdown', (event) => this.handleGridPointerDown(event));
     workspace?.addEventListener('pointerover', (event) => this.handleGridPointerOver(event));
-    workspace?.addEventListener('pointerup', () => { this.endArrangementDrag(); this.endGridDrag(); });
-    workspace?.addEventListener('pointercancel', () => { this.endArrangementDrag(); this.endGridDrag(); });
-    document.addEventListener('pointerup', () => { this.endArrangementDrag(); this.endGridDrag(); });
+    workspace?.addEventListener('pointerup', () => {
+      this.endArrangementDrag();
+      this.endGridDrag();
+    });
+    workspace?.addEventListener('pointercancel', () => {
+      this.endArrangementDrag();
+      this.endGridDrag();
+    });
+    document.addEventListener('pointerup', () => {
+      this.endArrangementDrag();
+      this.endGridDrag();
+    });
     document.addEventListener('keydown', (event) => this.handleGridShortcut(event));
     workspace?.addEventListener('input', (event) => this.handleWorkspaceInput(event));
-    workspace?.addEventListener('change', (event) => this.handleWorkspaceInput(event));
+    workspace?.addEventListener('change', (event) => {
+      this.handleWorkspaceInput(event);
+      this.handleDrumPadFileInput(event);
+    });
   }
 
   gridCellKey(data = {}) {
-    return [data.gridKind, data.moduleId, data.rowId || data.note || data.rowIndex || '', data.stepIndex ?? data.step ?? data.colIndex ?? ''].join(':');
+    return [
+      data.gridKind,
+      data.moduleId,
+      data.rowId || data.note || data.rowIndex || '',
+      data.stepIndex ?? data.step ?? data.colIndex ?? '',
+    ].join(':');
   }
 
   gridCellSelected(data = {}) {
@@ -397,7 +550,11 @@ class V11PeerDAW {
       append,
       source: data,
       sourceState: this.readGridCellState(data),
-      targetState: erase ? false : copy ? this.readGridCellState(data) : !this.readGridCellState(data),
+      targetState: erase
+        ? false
+        : copy
+          ? this.readGridCellState(data)
+          : !this.readGridCellState(data),
       seen: new Set(),
     };
     if (append) this.selectGridCell(data, { append: true, selected: !this.gridCellSelected(data) });
@@ -416,7 +573,13 @@ class V11PeerDAW {
 
   endGridDrag() {
     if (!this.gridDrag) return;
-    const reason = this.gridDrag.copy ? 'grid-copy-drag' : this.gridDrag.erase ? 'grid-erase-drag' : this.gridDrag.append ? 'grid-select-drag' : 'grid-drag-edit';
+    const reason = this.gridDrag.copy
+      ? 'grid-copy-drag'
+      : this.gridDrag.erase
+        ? 'grid-erase-drag'
+        : this.gridDrag.append
+          ? 'grid-select-drag'
+          : 'grid-drag-edit';
     this.gridDrag = null;
     this.renderWorkspaceView();
     this.publishProjectChange(reason);
@@ -439,12 +602,18 @@ class V11PeerDAW {
     }
     if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
       event.preventDefault();
-      this.editGridSelectionWithKeyboard(event.key, { shift: event.shiftKey, alt: event.altKey, copy: event.ctrlKey || event.metaKey });
+      this.editGridSelectionWithKeyboard(event.key, {
+        shift: event.shiftKey,
+        alt: event.altKey,
+        copy: event.ctrlKey || event.metaKey,
+      });
     }
   }
 
   noteNameToMidi(note = 'C4') {
-    const match = String(note).trim().match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
+    const match = String(note)
+      .trim()
+      .match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
     if (!match) return 60;
     const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[match[1].toUpperCase()] ?? 0;
     const accidental = match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0;
@@ -459,7 +628,16 @@ class V11PeerDAW {
 
   gridDataFromKey(key) {
     const [gridKind, moduleId, rowOrNote, step] = key.split(':');
-    return { gridKind, moduleId, rowId: rowOrNote, note: rowOrNote, rowIndex: rowOrNote, stepIndex: step, step, colIndex: step };
+    return {
+      gridKind,
+      moduleId,
+      rowId: rowOrNote,
+      note: rowOrNote,
+      rowIndex: rowOrNote,
+      stepIndex: step,
+      step,
+      colIndex: step,
+    };
   }
 
   selectedGridData() {
@@ -468,7 +646,10 @@ class V11PeerDAW {
 
   findPianoNote(module, data) {
     const stepResolution = module.stepResolutionBeats || 0.25;
-    return module.notes?.find((note) => note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step));
+    return module.notes?.find(
+      (note) =>
+        note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step)
+    );
   }
 
   eraseGridSelection() {
@@ -492,26 +673,46 @@ class V11PeerDAW {
         if (!note) continue;
         if (modifiers.shift && (key === 'ArrowLeft' || key === 'ArrowRight')) {
           const delta = key === 'ArrowRight' ? stepResolution : -stepResolution;
-          note.duration = Math.max(stepResolution, Number((Number(note.duration || stepResolution) + delta).toFixed(6)));
+          note.duration = Math.max(
+            stepResolution,
+            Number((Number(note.duration || stepResolution) + delta).toFixed(6))
+          );
           nextSelection.add(this.gridCellKey(data));
           continue;
         }
         if (modifiers.shift && (key === 'ArrowUp' || key === 'ArrowDown')) {
           const delta = key === 'ArrowUp' ? 0.05 : -0.05;
-          note.velocity = Math.max(0, Math.min(1, Number((Number(note.velocity || 0.8) + delta).toFixed(2))));
+          note.velocity = Math.max(
+            0,
+            Math.min(1, Number((Number(note.velocity || 0.8) + delta).toFixed(2)))
+          );
           nextSelection.add(this.gridCellKey(data));
           continue;
         }
         const target = { ...data };
         if (key === 'ArrowRight' || key === 'ArrowLeft') {
           const deltaSteps = key === 'ArrowRight' ? 1 : -1;
-          if (modifiers.copy) this.writeGridCell({ ...data, step: String(Number(data.step) + deltaSteps) }, true, data);
-          else note.beat = Math.max(0, Number((Number(note.beat || 0) + deltaSteps * stepResolution).toFixed(6)));
+          if (modifiers.copy)
+            this.writeGridCell(
+              { ...data, step: String(Number(data.step) + deltaSteps) },
+              true,
+              data
+            );
+          else
+            note.beat = Math.max(
+              0,
+              Number((Number(note.beat || 0) + deltaSteps * stepResolution).toFixed(6))
+            );
           target.step = String(Math.max(0, Number(data.step) + deltaSteps));
         }
         if (key === 'ArrowUp' || key === 'ArrowDown') {
           const deltaMidi = key === 'ArrowUp' ? 1 : -1;
-          if (modifiers.copy) this.writeGridCell({ ...data, note: this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi) }, true, data);
+          if (modifiers.copy)
+            this.writeGridCell(
+              { ...data, note: this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi) },
+              true,
+              data
+            );
           else note.note = this.midiToNoteName(this.noteNameToMidi(note.note) + deltaMidi);
           target.note = this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi);
         }
@@ -519,7 +720,10 @@ class V11PeerDAW {
       }
       if (data.gridKind === 'sequencer' && (key === 'ArrowRight' || key === 'ArrowLeft')) {
         const deltaSteps = key === 'ArrowRight' ? 1 : -1;
-        const target = { ...data, stepIndex: String(Math.max(0, Number(data.stepIndex) + deltaSteps)) };
+        const target = {
+          ...data,
+          stepIndex: String(Math.max(0, Number(data.stepIndex) + deltaSteps)),
+        };
         this.writeGridCell(target, true, data);
         if (!modifiers.copy) this.writeGridCell(data, false);
         nextSelection.add(this.gridCellKey(target));
@@ -533,7 +737,9 @@ class V11PeerDAW {
       }
     }
     this.gridSelection = nextSelection;
-    this.logText(`grid keyboard edit: ${key}${modifiers.shift ? ' shift' : ''}${modifiers.copy ? ' copy' : ''}`);
+    this.logText(
+      `grid keyboard edit: ${key}${modifiers.shift ? ' shift' : ''}${modifiers.copy ? ' copy' : ''}`
+    );
     this.renderWorkspaceView();
     this.publishProjectChange('grid-keyboard-edit');
   }
@@ -543,13 +749,17 @@ class V11PeerDAW {
     if (!module) return false;
     if (data.gridKind === 'piano') {
       const stepResolution = module.stepResolutionBeats || 0.25;
-      return module.notes?.some((note) => note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step));
+      return module.notes?.some(
+        (note) =>
+          note.note === data.note && Math.round(note.beat / stepResolution) === Number(data.step)
+      );
     }
     if (data.gridKind === 'sequencer') {
-      const row = module.rows?.find((candidate) => candidate.id === data.rowId);
+      const _row = module.rows?.find((candidate) => candidate.id === data.rowId);
       return Boolean(row?.steps?.[Number(data.stepIndex)]?.enabled);
     }
-    if (data.gridKind === 'ocra') return (module.grid?.[Number(data.rowIndex)]?.[Number(data.colIndex)] || '.') !== '.';
+    if (data.gridKind === 'ocra')
+      return (module.grid?.[Number(data.rowIndex)]?.[Number(data.colIndex)] || '.') !== '.';
     return false;
   }
 
@@ -559,12 +769,19 @@ class V11PeerDAW {
     if (data.gridKind === 'piano') {
       const stepResolution = module.stepResolutionBeats || 0.25;
       const step = Number(data.step);
-      const existing = module.notes?.findIndex((note) => note.note === data.note && Math.round(note.beat / stepResolution) === step);
+      const existing = module.notes?.findIndex(
+        (note) => note.note === data.note && Math.round(note.beat / stepResolution) === step
+      );
       if (!enabled && existing >= 0) module.notes.splice(existing, 1);
       if (enabled && existing < 0) {
-        const template = source?.gridKind === 'piano'
-          ? module.notes?.find((note) => note.note === source.note && Math.round(note.beat / stepResolution) === Number(source.step))
-          : null;
+        const template =
+          source?.gridKind === 'piano'
+            ? module.notes?.find(
+                (note) =>
+                  note.note === source.note &&
+                  Math.round(note.beat / stepResolution) === Number(source.step)
+              )
+            : null;
         module.notes = module.notes || [];
         module.notes.push({
           id: `note-${Date.now()}-${module.notes.length}`,
@@ -581,9 +798,12 @@ class V11PeerDAW {
       return;
     }
     if (data.gridKind === 'sequencer') {
-      const row = module.rows?.find((candidate) => candidate.id === data.rowId);
+      const _row = module.rows?.find((candidate) => candidate.id === data.rowId);
       const stepIndex = Number(data.stepIndex);
-      const templateRow = source?.gridKind === 'sequencer' ? module.rows?.find((candidate) => candidate.id === source.rowId) : null;
+      const templateRow =
+        source?.gridKind === 'sequencer'
+          ? module.rows?.find((candidate) => candidate.id === source.rowId)
+          : null;
       const template = templateRow?.steps?.[Number(source?.stepIndex)];
       module.setStep?.(data.rowId, stepIndex, { ...(template || {}), enabled });
       return;
@@ -592,7 +812,10 @@ class V11PeerDAW {
       const row = Number(data.rowIndex);
       const col = Number(data.colIndex);
       if (!module.grid?.[row]) return;
-      const sourceChar = source?.gridKind === 'ocra' ? module.grid?.[Number(source.rowIndex)]?.[Number(source.colIndex)] : null;
+      const sourceChar =
+        source?.gridKind === 'ocra'
+          ? module.grid?.[Number(source.rowIndex)]?.[Number(source.colIndex)]
+          : null;
       module.grid[row][col] = enabled ? (sourceChar && sourceChar !== '.' ? sourceChar : 'D') : '.';
       module.renderGrid?.(null);
     }
@@ -605,13 +828,26 @@ class V11PeerDAW {
     this.gridDrag.seen.add(key);
     this.selectGridCell(data, { append: true, selected: true });
     if (this.gridDrag.append) return;
-    this.writeGridCell(data, this.gridDrag.targetState, this.gridDrag.copy ? this.gridDrag.source : null);
+    this.writeGridCell(
+      data,
+      this.gridDrag.targetState,
+      this.gridDrag.copy ? this.gridDrag.source : null
+    );
   }
 
   duplicateGridSelection() {
     const parsed = [...this.gridSelection].map((key) => {
       const [gridKind, moduleId, rowOrNote, step] = key.split(':');
-      return { gridKind, moduleId, rowId: rowOrNote, note: rowOrNote, rowIndex: rowOrNote, stepIndex: step, step, colIndex: step };
+      return {
+        gridKind,
+        moduleId,
+        rowId: rowOrNote,
+        note: rowOrNote,
+        rowIndex: rowOrNote,
+        stepIndex: step,
+        step,
+        colIndex: step,
+      };
     });
     for (const data of parsed) {
       const target = { ...data };
@@ -631,7 +867,34 @@ class V11PeerDAW {
     document.querySelectorAll('[data-workspace-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.workspaceView === this.workspaceView);
     });
+    this.workspacePreferences.saveWorkspaceView(this.workspaceView);
     this.renderWorkspaceView();
+  }
+
+  restoreWorkspaceView() {
+    const saved = this.workspacePreferences.restoreWorkspaceView();
+    if (saved) this.setWorkspaceView(saved);
+  }
+
+  restoreDrawerStates() {
+    const drawers = [...document.querySelectorAll('.sidebar-drawer')];
+    this.workspacePreferences.restoreDrawerStates(drawers);
+    drawers.forEach((drawer) => {
+      drawer.addEventListener('toggle', () => this.saveDrawerStates());
+    });
+  }
+
+  saveDrawerStates() {
+    this.workspacePreferences.saveDrawerStates([...document.querySelectorAll('.sidebar-drawer')]);
+  }
+
+  scheduleRender() {
+    if (this._renderScheduled) return;
+    this._renderScheduled = true;
+    requestAnimationFrame(() => {
+      this._renderScheduled = false;
+      this.renderWorkspaceView();
+    });
   }
 
   workspaceModules() {
@@ -662,7 +925,13 @@ class V11PeerDAW {
         { beat: 2, note: note === 'C4' ? 'G4' : note, velocity: 0.65, duration: 1 },
       ],
     });
-    const slot = new ClipSlot({ channelId: normalizedModuleId, quantizationBeats: 4, clip, launchBeat, stopBeat });
+    const slot = new ClipSlot({
+      channelId: normalizedModuleId,
+      quantizationBeats: 4,
+      clip,
+      launchBeat,
+      stopBeat,
+    });
     slot.id = slotId;
     slot.moduleId = normalizedModuleId;
     slot.name = clip.name;
@@ -685,12 +954,7 @@ class V11PeerDAW {
   }
 
   serializeMixerState() {
-    return {
-      masterVolume: this.mixerState.masterVolume,
-      channels: Object.fromEntries(
-        Object.entries(this.mixerState.channels).map(([id, channel]) => [id, { ...channel }])
-      ),
-    };
+    return serializeMixerStateSnapshot(this.mixerState);
   }
 
   restoreMixerState(project = {}) {
@@ -703,19 +967,7 @@ class V11PeerDAW {
   }
 
   serializeClipState() {
-    return {
-      currentBeat: this.currentBeat,
-      slots: this.clipSlots.map((slot) => ({
-        id: slot.id,
-        moduleId: slot.moduleId,
-        name: slot.name,
-        channelId: slot.channelId,
-        quantizationBeats: slot.quantizationBeats,
-        launchBeat: slot.launchBeat,
-        stopBeat: slot.stopBeat,
-        clip: slot.clip?.serialize?.() || null,
-      })),
-    };
+    return serializeClipStateSnapshot({ currentBeat: this.currentBeat, clipSlots: this.clipSlots });
   }
 
   deserializeClipSlot(data = {}) {
@@ -735,9 +987,13 @@ class V11PeerDAW {
   restoreClipState(project = {}) {
     const clipState = project.clips || {};
     this.currentBeat = Number(clipState.currentBeat ?? project.currentBeat ?? 0);
-    this.clipSlots = Array.from(clipState.slots || project.clipSlots || []).map((slot) => this.deserializeClipSlot(slot));
+    this.clipSlots = Array.from(clipState.slots || project.clipSlots || []).map((slot) =>
+      this.deserializeClipSlot(slot)
+    );
     this.clipSlotSequence = this.clipSlots.length + 1;
-    this.arrangement = new Arrangement(project.arrangement || { loopStartBeat: 0, loopEndBeat: 16 });
+    this.arrangement = new Arrangement(
+      project.arrangement || { loopStartBeat: 0, loopEndBeat: 16 }
+    );
     this.ensureDefaultClipSlots({ force: this.clipSlots.length === 0 });
   }
 
@@ -783,7 +1039,11 @@ class V11PeerDAW {
     const slot = this.clipSlots.find((item) => item.id === slotId);
     if (!slot?.clip) return null;
     const startBeat = this.arrangement.clips.length * 4;
-    const placement = this.arrangement.placeClip({ clip: slot.clip, startBeat, trackId: slot.moduleId || slot.channelId });
+    const placement = this.arrangement.placeClip({
+      clip: slot.clip,
+      startBeat,
+      trackId: slot.moduleId || slot.channelId,
+    });
     this.logText(`clip placed on arrangement: ${slot.name} @ beat ${startBeat}`);
     return placement;
   }
@@ -802,7 +1062,10 @@ class V11PeerDAW {
   }
 
   arrangementLengthBeats() {
-    const clipEnd = Math.max(0, ...this.arrangement.clips.map((placement) => placement.startBeat + placement.clip.lengthBeats));
+    const clipEnd = Math.max(
+      0,
+      ...this.arrangement.clips.map((placement) => placement.startBeat + placement.clip.lengthBeats)
+    );
     return Math.max(16, this.arrangement.loopEndBeat || 0, clipEnd);
   }
 
@@ -823,7 +1086,11 @@ class V11PeerDAW {
     const placement = this.placementByIndex(index);
     if (!placement) return;
     const duplicate = this.arrangement.placeClip({
-      clip: new Clip({ ...placement.clip.serialize(), id: `${placement.clip.id}-copy-${Date.now()}`, name: `${placement.clip.name} Copy` }),
+      clip: new Clip({
+        ...placement.clip.serialize(),
+        id: `${placement.clip.id}-copy-${Date.now()}`,
+        name: `${placement.clip.name} Copy`,
+      }),
       startBeat: placement.startBeat + placement.clip.lengthBeats,
       trackId: placement.trackId,
     });
@@ -852,7 +1119,9 @@ class V11PeerDAW {
   }
 
   previewArrangementBeat(beat) {
-    this.currentBeat = this.arrangement.transportPositionAfter(Math.max(0, Number(beat)), { loop: true });
+    this.currentBeat = this.arrangement.transportPositionAfter(Math.max(0, Number(beat)), {
+      loop: true,
+    });
     const events = this.arrangement.eventsAt(this.currentBeat);
     this.logText(`arrangement preview beat ${this.currentBeat}: ${events.length} events`);
     this.renderWorkspaceView();
@@ -865,7 +1134,8 @@ class V11PeerDAW {
     if (action === 'move-right') return this.moveArrangementPlacement(index, 1);
     if (action === 'duplicate') return this.duplicateArrangementPlacement(index);
     if (action === 'delete') return this.deleteArrangementPlacement(index);
-    if (action === 'preview') return this.previewArrangementBeat(target.dataset.beat ?? this.currentBeat);
+    if (action === 'preview')
+      return this.previewArrangementBeat(target.dataset.beat ?? this.currentBeat);
     return null;
   }
 
@@ -901,7 +1171,8 @@ class V11PeerDAW {
       copied: event.ctrlKey || event.metaKey,
     };
     try {
-      if (clip.isConnected && typeof clip.setPointerCapture === 'function') clip.setPointerCapture(event.pointerId);
+      if (clip.isConnected && typeof clip.setPointerCapture === 'function')
+        clip.setPointerCapture(event.pointerId);
     } catch (_) {}
     event.preventDefault();
   }
@@ -911,21 +1182,43 @@ class V11PeerDAW {
     const placement = this.placementByIndex(this.arrangementDrag.index);
     if (!placement) return;
     const deltaPx = event.clientX - this.arrangementDrag.startX;
-    const rawDeltaBeats = (deltaPx / this.arrangementDrag.rectWidth) * this.arrangementDrag.lengthBeats;
+    const rawDeltaBeats =
+      (deltaPx / this.arrangementDrag.rectWidth) * this.arrangementDrag.lengthBeats;
     const snap = Math.max(0.25, this.arrangementDrag.snap);
     const quantizedDelta = Number((Math.round(rawDeltaBeats / snap) * snap).toFixed(6));
     if (this.arrangementDrag.mode === 'resize-end') {
-      const newLengthBeats = Math.max(snap, this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar + quantizedDelta);
-      placement.clip.lengthBars = Math.max(0.25, Number((newLengthBeats / this.arrangementDrag.beatsPerBar).toFixed(6)));
+      const newLengthBeats = Math.max(
+        snap,
+        this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar + quantizedDelta
+      );
+      placement.clip.lengthBars = Math.max(
+        0.25,
+        Number((newLengthBeats / this.arrangementDrag.beatsPerBar).toFixed(6))
+      );
     } else if (this.arrangementDrag.mode === 'resize-start') {
-      const newStart = Math.max(0, Number((this.arrangementDrag.startBeat + quantizedDelta).toFixed(6)));
-      const oldEnd = this.arrangementDrag.startBeat + this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar;
+      const newStart = Math.max(
+        0,
+        Number((this.arrangementDrag.startBeat + quantizedDelta).toFixed(6))
+      );
+      const oldEnd =
+        this.arrangementDrag.startBeat +
+        this.arrangementDrag.startLengthBars * this.arrangementDrag.beatsPerBar;
       placement.startBeat = Math.min(newStart, Math.max(0, oldEnd - snap));
-      placement.clip.lengthBars = Math.max(0.25, Number(((oldEnd - placement.startBeat) / this.arrangementDrag.beatsPerBar).toFixed(6)));
+      placement.clip.lengthBars = Math.max(
+        0.25,
+        Number(((oldEnd - placement.startBeat) / this.arrangementDrag.beatsPerBar).toFixed(6))
+      );
     } else {
-      placement.startBeat = Math.max(0, Number((Math.round((this.arrangementDrag.startBeat + rawDeltaBeats) / snap) * snap).toFixed(6)));
+      placement.startBeat = Math.max(
+        0,
+        Number(
+          (Math.round((this.arrangementDrag.startBeat + rawDeltaBeats) / snap) * snap).toFixed(6)
+        )
+      );
     }
-    const clipEl = document.querySelector(`[data-arrangement-clip][data-placement-index="${this.arrangementDrag.index}"]`);
+    const clipEl = document.querySelector(
+      `[data-arrangement-clip][data-placement-index="${CSS.escape(String(this.arrangementDrag.index))}"]`
+    );
     if (clipEl) {
       clipEl.style.left = `${Math.min(94, (placement.startBeat / this.arrangementDrag.lengthBeats) * 100)}%`;
       clipEl.style.width = `${Math.max(8, (placement.clip.lengthBeats / this.arrangementDrag.lengthBeats) * 100)}%`;
@@ -935,7 +1228,10 @@ class V11PeerDAW {
   endArrangementDrag() {
     if (!this.arrangementDrag) return;
     const placement = this.placementByIndex(this.arrangementDrag.index);
-    if (placement) this.logText(`arrangement clip ${this.arrangementDrag.mode === 'move' ? (this.arrangementDrag.copied ? 'copied' : 'dragged') : 'resized'}: ${placement.clip.name} @ beat ${placement.startBeat} len ${placement.clip.lengthBeats}`);
+    if (placement)
+      this.logText(
+        `arrangement clip ${this.arrangementDrag.mode === 'move' ? (this.arrangementDrag.copied ? 'copied' : 'dragged') : 'resized'}: ${placement.clip.name} @ beat ${placement.startBeat} len ${placement.clip.lengthBeats}`
+      );
     this.arrangementDrag = null;
     this.renderWorkspaceView();
     this.publishProjectChange('arrangement-drag');
@@ -944,38 +1240,69 @@ class V11PeerDAW {
   renderArrangementEditor() {
     const placements = this.arrangement.clips;
     const tracks = [...new Set(placements.map((placement) => placement.trackId))];
-    const lanes = tracks.length ? tracks : this.clipCapableModules().slice(0, 4).map((module) => module.id);
+    const lanes = tracks.length
+      ? tracks
+      : this.clipCapableModules()
+          .slice(0, 4)
+          .map((module) => module.id);
     const length = this.arrangementLengthBeats();
     const playheadPct = Math.min(98, Math.max(0, (this.currentBeat / length) * 100));
-    const laneMarkup = lanes.map((trackId) => {
-      const module = this.patchBay.modules.get(trackId);
-      const trackClips = placements
-        .map((placement, index) => ({ ...placement, index }))
-        .filter((placement) => placement.trackId === trackId);
-      return `<div class="timeline-lane arrangement-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track"><span class="timeline-playhead" style="left:${playheadPct}%"></span>${trackClips.map((placement) => `<span class="timeline-clip editable" data-arrangement-clip="true" data-placement-index="${placement.index}" style="left:${Math.min(94, (placement.startBeat / length) * 100)}%;width:${Math.max(8, (placement.clip.lengthBeats / length) * 100)}%"><i class="clip-resize-handle left" data-arrangement-resize="resize-start" title="drag to trim start"></i><strong>${this.escapeHtml(placement.clip.name)}</strong><small>@${this.escapeHtml(placement.startBeat)} · ${this.escapeHtml(placement.clip.lengthBeats)}b</small><i class="clip-resize-handle right" data-arrangement-resize="resize-end" title="drag to resize end"></i><span class="clip-actions"><button type="button" data-arrangement-action="move-left" data-placement-index="${placement.index}">◀</button><button type="button" data-arrangement-action="move-right" data-placement-index="${placement.index}">▶</button><button type="button" data-arrangement-action="duplicate" data-placement-index="${placement.index}">DUP</button><button type="button" data-arrangement-action="delete" data-placement-index="${placement.index}">×</button></span></span>`).join('')}</div></div>`;
-    }).join('');
+    const laneMarkup = lanes
+      .map((trackId) => {
+        const module = this.patchBay.modules.get(trackId);
+        const trackClips = placements
+          .map((placement, index) => ({ ...placement, index }))
+          .filter((placement) => placement.trackId === trackId);
+        return `<div class="timeline-lane arrangement-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track"><span class="timeline-playhead" style="left:${playheadPct}%"></span>${trackClips.map((placement) => `<span class="timeline-clip editable" data-arrangement-clip="true" data-placement-index="${placement.index}" style="left:${Math.min(94, (placement.startBeat / length) * 100)}%;width:${Math.max(8, (placement.clip.lengthBeats / length) * 100)}%"><i class="clip-resize-handle left" data-arrangement-resize="resize-start" title="drag to trim start"></i><strong>${this.escapeHtml(placement.clip.name)}</strong><small>@${this.escapeHtml(placement.startBeat)} · ${this.escapeHtml(placement.clip.lengthBeats)}b</small><i class="clip-resize-handle right" data-arrangement-resize="resize-end" title="drag to resize end"></i><span class="clip-actions"><button type="button" data-arrangement-action="move-left" data-placement-index="${placement.index}">◀</button><button type="button" data-arrangement-action="move-right" data-placement-index="${placement.index}">▶</button><button type="button" data-arrangement-action="duplicate" data-placement-index="${placement.index}">DUP</button><button type="button" data-arrangement-action="delete" data-placement-index="${placement.index}">×</button></span></span>`).join('')}</div></div>`;
+      })
+      .join('');
     return `<div class="workspace-toolbar arrangement-toolbar"><button type="button" data-clip-action="place-all">PLACE ALL CLIPS</button><button type="button" data-clip-action="clear-arrangement">CLEAR</button><label>Loop start <input data-arrangement-input="loop-start" type="number" min="0" step="1" value="${this.escapeHtml(this.arrangement.loopStartBeat)}"></label><label>Loop end <input data-arrangement-input="loop-end" type="number" min="1" step="1" value="${this.escapeHtml(this.arrangement.loopEndBeat)}"></label><label>Preview beat <input data-arrangement-input="preview-beat" type="number" min="0" step="1" value="${this.escapeHtml(this.currentBeat)}"></label><button type="button" data-arrangement-action="preview" data-beat="${this.escapeHtml(this.currentBeat)}">PREVIEW</button><span class="microcopy">${placements.length} placements · loop ${this.arrangement.loopStartBeat}-${this.arrangement.loopEndBeat} · ${this.arrangement.eventsAt(this.currentBeat).length} events now</span></div>${laneMarkup}<p class="microcopy">Arrangement editing is backed by Arrangement.placeClip(), eventsAt(), and transportPositionAfter(). Drag clip body to move, Ctrl/Cmd-drag to copy, drag edges to resize, Shift for 4-beat snap, Alt for fine 1/4-beat snap/delete.</p>`;
   }
 
   noteNames(module = null) {
-    const base = ['C5','B4','A4','G4','F4','E4','D4','C4','B3','A3','G3','F3'];
-    const actual = Array.from(new Set((module?.notes || []).map((note) => note.note).filter(Boolean)));
+    const base = ['C5', 'B4', 'A4', 'G4', 'F4', 'E4', 'D4', 'C4', 'B3', 'A3', 'G3', 'F3'];
+    const actual = Array.from(
+      new Set((module?.notes || []).map((note) => note.note).filter(Boolean))
+    );
     return [...actual.filter((note) => !base.includes(note)), ...base];
   }
 
   renderPianoRollEditor(module) {
     const notes = Array.isArray(module.notes) ? module.notes : [];
     const noteNames = this.noteNames(module);
-    const steps = Math.max(8, Math.min(64, module.steps || Math.ceil((module.lengthBeats || 4) / (module.stepResolutionBeats || 0.25))));
-    const cells = noteNames.map((noteName) => `
+    const steps = Math.max(
+      8,
+      Math.min(
+        64,
+        module.steps || Math.ceil((module.lengthBeats || 4) / (module.stepResolutionBeats || 0.25))
+      )
+    );
+    const cells = noteNames
+      .map(
+        (noteName) => `
       <div class="piano-note-label">${this.escapeHtml(noteName)}</div>
       ${Array.from({ length: steps }, (_, step) => {
-        const hasNote = notes.some((note) => note.note === noteName && Math.round(note.beat / module.stepResolutionBeats) === step);
-        const selected = this.gridCellSelected({ gridKind: 'piano', moduleId: module.id, note: noteName, step });
+        const hasNote = notes.some(
+          (note) =>
+            note.note === noteName && Math.round(note.beat / module.stepResolutionBeats) === step
+        );
+        const selected = this.gridCellSelected({
+          gridKind: 'piano',
+          moduleId: module.id,
+          note: noteName,
+          step,
+        });
         return `<button type="button" class="piano-cell ${hasNote ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="piano" data-grid-kind="piano" data-module-action="toggle-note" data-module-id="${this.escapeHtml(module.id)}" data-note="${this.escapeHtml(noteName)}" data-step="${step}" title="${this.escapeHtml(noteName)} step ${step + 1}">${hasNote ? '●' : ''}</button>`;
       }).join('')}
-    `).join('');
-    const noteRows = notes.map((note) => `<div class="workspace-row"><strong>${this.escapeHtml(note.note)}</strong><span>beat ${this.escapeHtml(note.beat)}</span><label>Velocity <input data-module-input="note-velocity" data-module-id="${this.escapeHtml(module.id)}" data-note-id="${this.escapeHtml(note.id)}" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(note.velocity)}"></label></div>`).join('');
+    `
+      )
+      .join('');
+    const noteRows = notes
+      .map(
+        (note) =>
+          `<div class="workspace-row"><strong>${this.escapeHtml(note.note)}</strong><span>beat ${this.escapeHtml(note.beat)}</span><label>Velocity <input data-module-input="note-velocity" data-module-id="${this.escapeHtml(module.id)}" data-note-id="${this.escapeHtml(note.id)}" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(note.velocity)}"></label></div>`
+      )
+      .join('');
     return `<div class="piano-roll-editor"><div class="workspace-toolbar"><button type="button" data-module-action="add-note" data-module-id="${this.escapeHtml(module.id)}">ADD NOTE</button><button type="button" data-module-action="clear-notes" data-module-id="${this.escapeHtml(module.id)}">CLEAR NOTES</button><button type="button" data-module-action="apply-swing" data-module-id="${this.escapeHtml(module.id)}">APPLY SWING</button><span class="microcopy">${notes.length} notes · ${steps} steps · click/drag paint · Shift select · Ctrl/Cmd+D duplicate · arrows move · Shift+arrows length/velocity · Delete erase</span></div><div class="piano-grid" style="--steps:${steps}">${cells}</div><div class="workspace-list">${noteRows || '<p class="microcopy">No notes yet. Click grid cells or ADD NOTE.</p>'}</div></div>`;
   }
 
@@ -995,13 +1322,22 @@ class V11PeerDAW {
   }
 
   mixerModules() {
-    return this.workspaceModules().filter((module) => module.outputs?.some((p) => p.type === PortType.AUDIO) || module.inputs?.some((p) => p.type === PortType.AUDIO) || module === this.mixer);
+    return this.workspaceModules().filter(
+      (module) =>
+        module.outputs?.some((p) => p.type === PortType.AUDIO) ||
+        module.inputs?.some((p) => p.type === PortType.AUDIO) ||
+        module === this.mixer
+    );
   }
 
   isSamplerModule(module) {
     return Boolean(
       module &&
-        (module.kind === 'audio-source' || module.fileName || module.sampleMetadata || module.pads || module.zones) &&
+        (module.kind === 'audio-source' ||
+          module.fileName ||
+          module.sampleMetadata ||
+          module.pads ||
+          module.zones) &&
         (module.setSampleMetadata || module.assignPad || module.sliceCount !== undefined)
     );
   }
@@ -1009,7 +1345,9 @@ class V11PeerDAW {
   ensureWaveformEdit(module) {
     module.waveformEdit = module.waveformEdit || {
       trimStartMs: 0,
-      trimEndMs: module.sampleMetadata?.sampleLengthMs || (module.buffer ? Math.round(module.buffer.duration * 1000) : 0),
+      trimEndMs:
+        module.sampleMetadata?.sampleLengthMs ||
+        (module.buffer ? Math.round(module.buffer.duration * 1000) : 0),
       fadeInMs: 0,
       fadeOutMs: 0,
       gain: 1,
@@ -1021,7 +1359,9 @@ class V11PeerDAW {
 
   renderWaveformEditPanel(module) {
     const edit = this.ensureWaveformEdit(module);
-    const length = module.sampleMetadata?.sampleLengthMs || (module.buffer ? Math.round(module.buffer.duration * 1000) : 0);
+    const length =
+      module.sampleMetadata?.sampleLengthMs ||
+      (module.buffer ? Math.round(module.buffer.duration * 1000) : 0);
     return `<article class="workspace-card module-editor-card waveform-edit-panel"><strong>Waveform / buffer edit</strong>${this.renderSamplerWaveformPreview(module)}<label>Trim start ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="trimStartMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.trimStartMs)}"></label><label>Trim end ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="trimEndMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.trimEndMs || length)}"></label><label>Fade in ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="fadeInMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.fadeInMs)}"></label><label>Fade out ms <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="fadeOutMs" type="number" min="0" step="1" value="${this.escapeHtml(edit.fadeOutMs)}"></label><label>Gain <input data-module-input="waveform-edit" data-module-id="${this.escapeHtml(module.id)}" data-waveform-key="gain" type="range" min="0" max="2" step="0.01" value="${this.escapeHtml(edit.gain)}"></label><div class="button-row"><button type="button" data-module-action="waveform-normalize" data-module-id="${this.escapeHtml(module.id)}">NORMALIZE</button><button type="button" data-module-action="waveform-reverse" data-module-id="${this.escapeHtml(module.id)}">${edit.reverse ? 'UNREVERSE' : 'REVERSE'}</button><button type="button" data-module-action="waveform-apply-take" data-module-id="${this.escapeHtml(module.id)}">APPLY AS TAKE</button></div><p class="microcopy">Non-destructive edit metadata: ${this.escapeHtml(edit.trimStartMs)}-${this.escapeHtml(edit.trimEndMs || length)} ms · gain ${this.escapeHtml(edit.gain)} · ${edit.reverse ? 'reversed' : 'forward'}${edit.normalized ? ' · normalized' : ''}</p></article>`;
   }
 
@@ -1033,12 +1373,13 @@ class V11PeerDAW {
   renderCleanSamplerEditor(module) {
     const metadata = module.sampleMetadata || {};
     const cues = metadata.cues || [];
-    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Sample</strong><span class="big-number sampler-file-name">${this.escapeHtml(module.fileName || 'no sample')}</span>${this.renderSamplerWaveformPreview(module)}<div class="button-row"><button type="button" data-module-action="sampler-play" data-module-id="${this.escapeHtml(module.id)}">PLAY ${this.escapeHtml(module.rootNote || 'C4')}</button><button type="button" data-module-action="sampler-sync-library" data-module-id="${this.escapeHtml(module.id)}">SYNC LIBRARY</button></div></article>${this.renderWaveformEditPanel(module)}<article class="workspace-card module-editor-card"><strong>Pitch/time</strong><label>Root note <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="rootNote" type="text" value="${this.escapeHtml(module.rootNote || 'C4')}"></label><label>Time shift <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="timeShift" type="number" min="0" step="0.01" value="${this.escapeHtml(module.timeShift ?? 0)}"></label><label>Stretch <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="stretchRatio" type="range" min="0.25" max="4" step="0.01" value="${this.escapeHtml(module.stretchRatio ?? 1)}"></label><label>Pitch semitones <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchSemitones" type="range" min="-48" max="48" step="1" value="${this.escapeHtml(module.pitchSemitones ?? 0)}"></label><label>Pitch cents <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchCents" type="range" min="-100" max="100" step="1" value="${this.escapeHtml(module.pitchCents ?? 0)}"></label></article><article class="workspace-card module-editor-card"><strong>Envelope</strong>${['attack','decay','sustain','release'].map((key) => `<label>${key.toUpperCase()} <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${key}" type="range" min="${key === 'sustain' ? 0 : 0.001}" max="${key === 'sustain' ? 1 : 4}" step="0.001" value="${this.escapeHtml(module[key] ?? 0)}"></label>`).join('')}</article><article class="workspace-card module-editor-card"><strong>Metadata</strong><label>BPM <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="bpm" type="number" min="1" max="400" step="0.01" value="${this.escapeHtml(metadata.bpm || '')}"></label><label>Tags <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="tags" type="text" value="${this.escapeHtml((metadata.tags || []).join(', '))}"></label><label>Creator <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="creator" type="text" value="${this.escapeHtml(metadata.creator || '')}"></label><label>Instrument <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="instrument" type="text" value="${this.escapeHtml(metadata.instrument || '')}"></label><label>Song <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="songTitle" type="text" value="${this.escapeHtml(metadata.songTitle || '')}"></label><div class="button-row"><button type="button" data-module-action="sampler-add-cue" data-module-id="${this.escapeHtml(module.id)}">ADD CUE</button><button type="button" data-module-action="sampler-gen-cues" data-module-id="${this.escapeHtml(module.id)}">GEN 4 CUES</button></div><p class="microcopy">${cues.length} cues · ${this.escapeHtml(metadata.sampleLengthMs || 0)} ms</p></article></div>`;
+    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Sample</strong><span class="big-number sampler-file-name">${this.escapeHtml(module.fileName || 'no sample')}</span>${this.renderSamplerWaveformPreview(module)}<div class="button-row"><button type="button" data-module-action="sampler-play" data-module-id="${this.escapeHtml(module.id)}">PLAY ${this.escapeHtml(module.rootNote || 'C4')}</button><button type="button" data-module-action="sampler-sync-library" data-module-id="${this.escapeHtml(module.id)}">SYNC LIBRARY</button></div></article>${this.renderWaveformEditPanel(module)}<article class="workspace-card module-editor-card"><strong>Pitch/time</strong><label>Root note <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="rootNote" type="text" value="${this.escapeHtml(module.rootNote || 'C4')}"></label><label>Time shift <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="timeShift" type="number" min="0" step="0.01" value="${this.escapeHtml(module.timeShift ?? 0)}"></label><label>Stretch <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="stretchRatio" type="range" min="0.25" max="4" step="0.01" value="${this.escapeHtml(module.stretchRatio ?? 1)}"></label><label>Pitch semitones <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchSemitones" type="range" min="-48" max="48" step="1" value="${this.escapeHtml(module.pitchSemitones ?? 0)}"></label><label>Pitch cents <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="pitchCents" type="range" min="-100" max="100" step="1" value="${this.escapeHtml(module.pitchCents ?? 0)}"></label></article><article class="workspace-card module-editor-card"><strong>Envelope</strong>${['attack', 'decay', 'sustain', 'release'].map((key) => `<label>${key.toUpperCase()} <input data-module-input="sampler-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${key}" type="range" min="${key === 'sustain' ? 0 : 0.001}" max="${key === 'sustain' ? 1 : 4}" step="0.001" value="${this.escapeHtml(module[key] ?? 0)}"></label>`).join('')}</article><article class="workspace-card module-editor-card"><strong>Metadata</strong><label>BPM <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="bpm" type="number" min="1" max="400" step="0.01" value="${this.escapeHtml(metadata.bpm || '')}"></label><label>Tags <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="tags" type="text" value="${this.escapeHtml((metadata.tags || []).join(', '))}"></label><label>Creator <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="creator" type="text" value="${this.escapeHtml(metadata.creator || '')}"></label><label>Instrument <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="instrument" type="text" value="${this.escapeHtml(metadata.instrument || '')}"></label><label>Song <input data-module-input="sampler-meta" data-module-id="${this.escapeHtml(module.id)}" data-meta-key="songTitle" type="text" value="${this.escapeHtml(metadata.songTitle || '')}"></label><div class="button-row"><button type="button" data-module-action="sampler-add-cue" data-module-id="${this.escapeHtml(module.id)}">ADD CUE</button><button type="button" data-module-action="sampler-gen-cues" data-module-id="${this.escapeHtml(module.id)}">GEN 4 CUES</button></div><p class="microcopy">${cues.length} cues · ${this.escapeHtml(metadata.sampleLengthMs || 0)} ms</p></article></div>`;
   }
 
   renderDrumSamplerEditor(module) {
     const pads = [...(module.pads?.values?.() || [])];
-    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Drum pad setup</strong><label>Swing <select data-module-input="drum-swing" data-module-id="${this.escapeHtml(module.id)}">${['swing50','swing54','swing57','swing60','swing62','swing66','swing75','swing90'].map((value) => `<option value="${value}" ${value === module.swing ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Resolution <select data-module-input="drum-resolution" data-module-id="${this.escapeHtml(module.id)}">${['1/4','1/8','1/16'].map((value) => `<option value="${value}" ${value === module.swingResolution ? 'selected' : ''}>${value}</option>`).join('')}</select></label></article><div class="drum-pad-editor-grid">${pads.map((pad) => `<article class="workspace-card module-editor-card drum-pad-editor"><strong>${this.escapeHtml(pad.id)}</strong><label>Name <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="name" type="text" value="${this.escapeHtml(pad.name)}"></label><label>Note <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="note" type="text" value="${this.escapeHtml(pad.note)}"></label><label>Gain <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="gain" type="range" min="0" max="2" step="0.01" value="${this.escapeHtml(pad.gain)}"></label><label>Pan <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="pan" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(pad.pan)}"></label><label>Choke <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="chokeGroup" type="text" value="${this.escapeHtml(pad.chokeGroup || '')}"></label><button type="button" data-module-action="drum-trigger-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-note="${this.escapeHtml(pad.note)}">TRIGGER</button></article>`).join('')}</div></div>`;
+    const loadedCount = pads.filter((pad) => pad.buffer).length;
+    return `<div class="sampler-editor"><article class="workspace-card module-editor-card"><strong>Drum pad setup</strong><span class="drum-pad-summary">${loadedCount}/${pads.length} pads have samples assigned</span><label>Swing <select data-module-input="drum-swing" data-module-id="${this.escapeHtml(module.id)}">${['swing50', 'swing54', 'swing57', 'swing60', 'swing62', 'swing66', 'swing75', 'swing90'].map((value) => `<option value="${value}" ${value === module.swing ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Resolution <select data-module-input="drum-resolution" data-module-id="${this.escapeHtml(module.id)}">${['1/4', '1/8', '1/16'].map((value) => `<option value="${value}" ${value === module.swingResolution ? 'selected' : ''}>${value}</option>`).join('')}</select></label></article><div class="drum-pad-editor-grid">${pads.map((pad) => `<article class="workspace-card module-editor-card drum-pad-editor ${pad.buffer ? 'drum-pad-loaded' : 'drum-pad-empty'}"><div class="drum-pad-header"><strong>${this.escapeHtml(pad.id)}</strong><span class="drum-pad-status-badge ${pad.buffer ? 'badge-loaded' : 'badge-empty'}">${pad.buffer ? 'LOADED' : 'EMPTY'}</span></div><div class="drum-pad-sample-info">${pad.buffer ? `<span class="drum-pad-file-name">${this.escapeHtml(pad.fileName || 'unnamed sample')}</span>` : `<span class="drum-pad-drop-hint">drop audio file or use button below</span>`}</div><label>Name <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="name" type="text" value="${this.escapeHtml(pad.name)}"></label><label>Note <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="note" type="text" value="${this.escapeHtml(pad.note)}"></label><label>Gain <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="gain" type="range" min="0" max="2" step="0.01" value="${this.escapeHtml(pad.gain)}"></label><label>Pan <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="pan" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(pad.pan)}"></label><label>Choke <input data-module-input="drum-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}" data-pad-key="chokeGroup" type="text" value="${this.escapeHtml(pad.chokeGroup || '')}"></label><div class="drum-pad-actions"><button type="button" data-module-action="drum-trigger-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-note="${this.escapeHtml(pad.note)}">TRIGGER</button><label class="drum-pad-upload-label"><input type="file" accept="audio/*" class="drum-pad-file-input" data-module-action="drum-load-pad-file" data-module-id="${this.escapeHtml(module.id)}" data-pad-id="${this.escapeHtml(pad.id)}">LOAD SAMPLE</label></div></article>`).join('')}</div></div>`;
   }
 
   renderMultiSamplerEditor(module) {
@@ -1049,35 +1390,73 @@ class V11PeerDAW {
   renderSamplerEditor(module) {
     const inspector = `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Sample editor coverage</strong><p class="microcopy">Full-pane sampler editor started. Waveforms, pads, metadata and zones use existing sampler module APIs.</p></article></div>`;
     if (module.pads instanceof Map) return inspector + this.renderDrumSamplerEditor(module);
-    if (Array.isArray(module.zones) || module.sliceCount !== undefined) return inspector + this.renderMultiSamplerEditor(module);
+    if (Array.isArray(module.zones) || module.sliceCount !== undefined)
+      return inspector + this.renderMultiSamplerEditor(module);
     return inspector + this.renderCleanSamplerEditor(module);
   }
 
   isPatternModule(module) {
-    return Boolean(module && (Array.isArray(module.rows) || Array.isArray(module.grid) || typeof module.arpPattern === 'function'));
+    return Boolean(
+      module &&
+        (Array.isArray(module.rows) ||
+          Array.isArray(module.grid) ||
+          typeof module.arpPattern === 'function')
+    );
   }
 
   renderSequencerPatternEditor(module) {
     const rows = module.rows || [];
-    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>Step sequencer pattern</strong><label>Length <select data-module-input="sequencer-length" data-module-id="${this.escapeHtml(module.id)}">${[4,8,16].map((value) => `<option value="${value}" ${value === module.length ? 'selected' : ''}>${value}</option>`).join('')}</select></label><button type="button" data-module-action="sequencer-convert" data-module-id="${this.escapeHtml(module.id)}">CONVERT TO PIANO ROLL</button><p class="microcopy">${rows.length} rows · ${module.length || 16} steps · editable velocity/micro timing</p></article><div class="pattern-grid">${rows.map((row) => `<div class="pattern-row"><strong>${this.escapeHtml(row.label || row.id)}</strong><span class="pill">${this.escapeHtml(row.note)}</span>${row.steps.map((step, index) => {
-      const selected = this.gridCellSelected({ gridKind: 'sequencer', moduleId: module.id, rowId: row.id, stepIndex: index });
-      return `<button type="button" class="pattern-step ${step.enabled ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="sequencer" data-grid-kind="sequencer" data-module-action="sequencer-toggle-step" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="${index}">${step.enabled ? '◆' : '·'}</button>`;
-    }).join('')}</div>`).join('')}</div><div class="workspace-list">${rows.map((row) => `<article class="workspace-card module-editor-card"><strong>${this.escapeHtml(row.label || row.id)} controls</strong><label>Step 1 velocity <input data-module-input="sequencer-velocity" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(row.steps[0]?.velocity ?? 0.8)}"></label><label>Step 1 micro <input data-module-input="sequencer-micro" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="-0.5" max="0.5" step="0.01" value="${this.escapeHtml(row.steps[0]?.microTiming ?? 0)}"></label></article>`).join('')}</div></div>`;
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>Step sequencer pattern</strong><label>Length <select data-module-input="sequencer-length" data-module-id="${this.escapeHtml(module.id)}">${[4, 8, 16].map((value) => `<option value="${value}" ${value === module.length ? 'selected' : ''}>${value}</option>`).join('')}</select></label><button type="button" data-module-action="sequencer-convert" data-module-id="${this.escapeHtml(module.id)}">CONVERT TO PIANO ROLL</button><p class="microcopy">${rows.length} rows · ${module.length || 16} steps · editable velocity/micro timing</p></article><div class="pattern-grid">${rows
+      .map(
+        (row) =>
+          `<div class="pattern-row"><strong>${this.escapeHtml(row.label || row.id)}</strong><span class="pill">${this.escapeHtml(row.note)}</span>${row.steps
+            .map((step, index) => {
+              const selected = this.gridCellSelected({
+                gridKind: 'sequencer',
+                moduleId: module.id,
+                rowId: row.id,
+                stepIndex: index,
+              });
+              return `<button type="button" class="pattern-step ${step.enabled ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="sequencer" data-grid-kind="sequencer" data-module-action="sequencer-toggle-step" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="${index}">${step.enabled ? '◆' : '·'}</button>`;
+            })
+            .join('')}</div>`
+      )
+      .join(
+        ''
+      )}</div><div class="workspace-list">${rows.map((row) => `<article class="workspace-card module-editor-card"><strong>${this.escapeHtml(row.label || row.id)} controls</strong><label>Step 1 velocity <input data-module-input="sequencer-velocity" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(row.steps[0]?.velocity ?? 0.8)}"></label><label>Step 1 micro <input data-module-input="sequencer-micro" data-module-id="${this.escapeHtml(module.id)}" data-row-id="${this.escapeHtml(row.id)}" data-step-index="0" type="range" min="-0.5" max="0.5" step="0.01" value="${this.escapeHtml(row.steps[0]?.microTiming ?? 0)}"></label></article>`).join('')}</div></div>`;
   }
 
   renderOcraPatternEditor(module) {
     const rows = module.grid || [];
-    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>OCRA grid editor</strong><div class="button-row"><button type="button" data-module-action="ocra-clear" data-module-id="${this.escapeHtml(module.id)}">CLEAR</button><button type="button" data-module-action="ocra-basic-pulse" data-module-id="${this.escapeHtml(module.id)}">BASIC PULSE</button><button type="button" data-module-action="ocra-step" data-module-id="${this.escapeHtml(module.id)}">RUN FRAME</button></div><p class="microcopy">Edit cells as ORCA text rows. Row mixer controls remain in the compact card.</p></article><div class="ocra-text-grid">${rows.map((row, rowIndex) => `<label>R${String(rowIndex).padStart(2,'0')} <input data-module-input="ocra-row" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" type="text" maxlength="32" value="${this.escapeHtml(row.join ? row.join('') : String(row))}"></label>`).join('')}</div><div class="ocra-cell-grid">${rows.map((row, rowIndex) => `<div class="ocra-cell-row"><strong>R${String(rowIndex).padStart(2,'0')}</strong>${Array.from(row).map((char, colIndex) => { const selected = this.gridCellSelected({ gridKind: 'ocra', moduleId: module.id, rowIndex, colIndex }); return `<button type="button" class="ocra-cell ${char !== '.' ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="ocra" data-grid-kind="ocra" data-module-action="ocra-toggle-cell" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" data-col-index="${colIndex}">${this.escapeHtml(char)}</button>`; }).join('')}</div>`).join('')}</div></div>`;
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>OCRA grid editor</strong><div class="button-row"><button type="button" data-module-action="ocra-clear" data-module-id="${this.escapeHtml(module.id)}">CLEAR</button><button type="button" data-module-action="ocra-basic-pulse" data-module-id="${this.escapeHtml(module.id)}">BASIC PULSE</button><button type="button" data-module-action="ocra-step" data-module-id="${this.escapeHtml(module.id)}">RUN FRAME</button></div><p class="microcopy">Edit cells as ORCA text rows. Row mixer controls remain in the compact card.</p></article><div class="ocra-text-grid">${rows.map((row, rowIndex) => `<label>R${String(rowIndex).padStart(2, '0')} <input data-module-input="ocra-row" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" type="text" maxlength="32" value="${this.escapeHtml(row.join ? row.join('') : String(row))}"></label>`).join('')}</div><div class="ocra-cell-grid">${rows
+      .map(
+        (row, rowIndex) =>
+          `<div class="ocra-cell-row"><strong>R${String(rowIndex).padStart(2, '0')}</strong>${Array.from(
+            row
+          )
+            .map((char, colIndex) => {
+              const selected = this.gridCellSelected({
+                gridKind: 'ocra',
+                moduleId: module.id,
+                rowIndex,
+                colIndex,
+              });
+              return `<button type="button" class="ocra-cell ${char !== '.' ? 'on' : ''} ${selected ? 'selected' : ''}" data-grid-cell="ocra" data-grid-kind="ocra" data-module-action="ocra-toggle-cell" data-module-id="${this.escapeHtml(module.id)}" data-row-index="${rowIndex}" data-col-index="${colIndex}">${this.escapeHtml(char)}</button>`;
+            })
+            .join('')}</div>`
+      )
+      .join('')}</div></div>`;
   }
 
   renderArpPatternEditor(module) {
-    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>ARP pattern editor</strong><label>Notes <input data-module-input="arp-notes" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml((module.notes || []).join(', '))}" placeholder="C3, E3, G3"></label><label>Scale <select data-module-input="arp-param" data-param-key="scale" data-module-id="${this.escapeHtml(module.id)}">${['chromatic','major','minor'].map((value) => `<option value="${value}" ${value === module.scale ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Interval <select data-module-input="arp-param" data-param-key="interval" data-module-id="${this.escapeHtml(module.id)}">${['scale','tritone','fifth','octave'].map((value) => `<option value="${value}" ${value === module.interval ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Direction <select data-module-input="arp-param" data-param-key="direction" data-module-id="${this.escapeHtml(module.id)}">${['up','down'].map((value) => `<option value="${value}" ${value === module.direction ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Octaves <input data-module-input="arp-param" data-param-key="octaves" data-module-id="${this.escapeHtml(module.id)}" type="number" min="1" max="6" value="${this.escapeHtml(module.octaves || 1)}"></label><button type="button" data-module-action="arp-preview" data-module-id="${this.escapeHtml(module.id)}">PREVIEW PATTERN</button></article><article class="workspace-card module-editor-card"><strong>Generated pattern</strong><div class="module-port-grid">${(module.arpPattern?.() || []).map((note) => `<span class="pill">${this.escapeHtml(note)}</span>`).join('') || '<span class="pill">add notes to generate pattern</span>'}</div></article></div>`;
+    return `<div class="pattern-editor"><article class="workspace-card module-editor-card"><strong>ARP pattern editor</strong><label>Notes <input data-module-input="arp-notes" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml((module.notes || []).join(', '))}" placeholder="C3, E3, G3"></label><label>Scale <select data-module-input="arp-param" data-param-key="scale" data-module-id="${this.escapeHtml(module.id)}">${['chromatic', 'major', 'minor'].map((value) => `<option value="${value}" ${value === module.scale ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Interval <select data-module-input="arp-param" data-param-key="interval" data-module-id="${this.escapeHtml(module.id)}">${['scale', 'tritone', 'fifth', 'octave'].map((value) => `<option value="${value}" ${value === module.interval ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Direction <select data-module-input="arp-param" data-param-key="direction" data-module-id="${this.escapeHtml(module.id)}">${['up', 'down'].map((value) => `<option value="${value}" ${value === module.direction ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Octaves <input data-module-input="arp-param" data-param-key="octaves" data-module-id="${this.escapeHtml(module.id)}" type="number" min="1" max="6" value="${this.escapeHtml(module.octaves || 1)}"></label><button type="button" data-module-action="arp-preview" data-module-id="${this.escapeHtml(module.id)}">PREVIEW PATTERN</button></article><article class="workspace-card module-editor-card"><strong>Generated pattern</strong><div class="module-port-grid">${(module.arpPattern?.() || []).map((note) => `<span class="pill">${this.escapeHtml(note)}</span>`).join('') || '<span class="pill">add notes to generate pattern</span>'}</div></article></div>`;
   }
 
   renderPatternEditor(module) {
     const inspector = `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Pattern editor coverage</strong><p class="microcopy">Full-pane OCRA/sequencer/arp editor started. Pattern data uses the module's existing grid/rows/arp APIs.</p></article></div>`;
     if (Array.isArray(module.grid)) return inspector + this.renderOcraPatternEditor(module);
-    if (typeof module.arpPattern === 'function') return inspector + this.renderArpPatternEditor(module);
+    if (typeof module.arpPattern === 'function')
+      return inspector + this.renderArpPatternEditor(module);
     return inspector + this.renderSequencerPatternEditor(module);
   }
 
@@ -1088,12 +1467,25 @@ class V11PeerDAW {
 
   renderPeerMonitorEditor(module) {
     const recentPackets = module.packetLog || [];
-    const routes = this.patchBay.routes.filter((route) => route.from.moduleId === module.id || route.to.moduleId === module.id);
-    return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>Peer / wiring monitor</strong><p class="microcopy">Status: ${this.escapeHtml(module.status || 'offline')} · lobby ${this.escapeHtml(module.lobbyId || 'n/a')}</p><label>Pilot <input data-module-input="peer-pilot" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml(module.lastPilot || 'pilot')}"></label><div class="button-row"><button type="button" data-module-action="peer-connect" data-module-id="${this.escapeHtml(module.id)}">CONNECT</button><button type="button" data-module-action="peer-test-packet" data-module-id="${this.escapeHtml(module.id)}">TEST PACKET</button><button type="button" data-module-action="peer-clear-log" data-module-id="${this.escapeHtml(module.id)}">CLEAR LOG</button></div></article><article class="workspace-card module-editor-card"><strong>Patch routes</strong><div class="route-mini-list">${routes.map((route) => `<span class="pill">${this.escapeHtml(route.from.moduleId)}.${this.escapeHtml(route.from.outputId)} → ${this.escapeHtml(route.to.moduleId)}.${this.escapeHtml(route.to.inputId)}</span>`).join('') || '<span class="pill">no peer routes</span>'}</div></article><article class="workspace-card module-editor-card"><strong>Recent packets</strong><div class="workspace-list">${recentPackets.slice(-8).map((packet) => `<span class="pill">${this.escapeHtml(packet.kind || packet.type || 'packet')} · ${this.escapeHtml(packet.type || packet.note || packet.value || '')}</span>`).join('') || '<span class="pill">no packets yet</span>'}</div></article></div>`;
+    const routes = this.patchBay.routes.filter(
+      (route) => route.from.moduleId === module.id || route.to.moduleId === module.id
+    );
+    return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>Peer / wiring monitor</strong><p class="microcopy">Status: ${this.escapeHtml(module.status || 'offline')} · lobby ${this.escapeHtml(module.lobbyId || 'n/a')}</p><label>Pilot <input data-module-input="peer-pilot" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml(module.lastPilot || 'pilot')}"></label><div class="button-row"><button type="button" data-module-action="peer-connect" data-module-id="${this.escapeHtml(module.id)}">CONNECT</button><button type="button" data-module-action="peer-test-packet" data-module-id="${this.escapeHtml(module.id)}">TEST PACKET</button><button type="button" data-module-action="peer-clear-log" data-module-id="${this.escapeHtml(module.id)}">CLEAR LOG</button></div></article><article class="workspace-card module-editor-card"><strong>Patch routes</strong><div class="route-mini-list">${routes.map((route) => `<span class="pill">${this.escapeHtml(route.from.moduleId)}.${this.escapeHtml(route.from.outputId)} → ${this.escapeHtml(route.to.moduleId)}.${this.escapeHtml(route.to.inputId)}</span>`).join('') || '<span class="pill">no peer routes</span>'}</div></article><article class="workspace-card module-editor-card"><strong>Recent packets</strong><div class="workspace-list">${
+      recentPackets
+        .slice(-8)
+        .map(
+          (packet) =>
+            `<span class="pill">${this.escapeHtml(packet.kind || packet.type || 'packet')} · ${this.escapeHtml(packet.type || packet.note || packet.value || '')}</span>`
+        )
+        .join('') || '<span class="pill">no packets yet</span>'
+    }</div></article></div>`;
   }
 
   renderModulePorts(module) {
-    const portRows = [...(module.inputs || []).map((port) => ({ ...port, dir: 'in' })), ...(module.outputs || []).map((port) => ({ ...port, dir: 'out' }))];
+    const portRows = [
+      ...(module.inputs || []).map((port) => ({ ...port, dir: 'in' })),
+      ...(module.outputs || []).map((port) => ({ ...port, dir: 'out' })),
+    ];
     return `<div class="module-port-grid">${portRows.map((port) => `<span class="pill">${this.escapeHtml(port.dir)} · ${this.escapeHtml(port.id)} · ${this.escapeHtml(port.type)}</span>`).join('') || '<span class="pill">no ports</span>'}</div>`;
   }
 
@@ -1101,11 +1493,19 @@ class V11PeerDAW {
     return `<div class="workspace-card module-editor-card"><strong>Transport controls</strong><label>BPM <input data-module-input="clock-bpm" data-module-id="${this.escapeHtml(module.id)}" type="number" min="40" max="260" step="1" value="${this.escapeHtml(module.bpm || 120)}"></label><p class="microcopy">Updates the focused clock module. Full tap-tempo/groove controls are tracked in MODULE_UI_BACKLOG.</p></div>`;
   }
 
-  synthRange(module, key, { min = 0, max = 1, step = 0.01, label = key, value = module[key] } = {}) {
+  synthRange(
+    module,
+    key,
+    { min = 0, max = 1, step = 0.01, label = key, value = module[key] } = {}
+  ) {
     return `<label>${this.escapeHtml(label)} <input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="range" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}"></label>`;
   }
 
-  synthNumber(module, key, { min = 0, max = 16, step = 0.01, label = key, value = module[key] } = {}) {
+  synthNumber(
+    module,
+    key,
+    { min = 0, max = 16, step = 0.01, label = key, value = module[key] } = {}
+  ) {
     return `<label>${this.escapeHtml(label)} <input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="number" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}"></label>`;
   }
 
@@ -1119,16 +1519,35 @@ class V11PeerDAW {
     const waveforms = ['sine', 'triangle', 'sawtooth', 'square'];
     const waveform = module.waveform || module.oscillatorType || 'triangle';
     const hasOscMix = module.oscillatorMix && typeof module.oscillatorMix === 'object';
-    const oscillatorPanel = `<section class="synth-panel"><strong>Oscillator</strong>${'waveform' in module || 'oscillatorType' in module ? `<label>Waveform <select data-module-input="synth-param" data-param-key="waveform" data-module-id="${this.escapeHtml(module.id)}">${waveforms.map((w) => `<option value="${w}" ${w === waveform ? 'selected' : ''}>${w}</option>`).join('')}</select></label>` : ''}${hasOscMix ? Object.entries(module.oscillatorMix).map(([key, value]) => this.synthRange(module, `oscillatorMix.${key}`, { min: 0, max: 1.5, step: 0.01, label: `${key} mix`, value })).join('') : ''}${'detuneCents' in module ? this.synthRange(module, 'detuneCents', { min: 0, max: 48, step: 0.1, label: 'Detune cents' }) : ''}</section>`;
-    const filterPanel = ['cutoff', 'resonance', 'filterEnvelopeAmount', 'driveAmount'].some((key) => key in module)
+    const oscillatorPanel = `<section class="synth-panel"><strong>Oscillator</strong>${'waveform' in module || 'oscillatorType' in module ? `<label>Waveform <select data-module-input="synth-param" data-param-key="waveform" data-module-id="${this.escapeHtml(module.id)}">${waveforms.map((w) => `<option value="${w}" ${w === waveform ? 'selected' : ''}>${w}</option>`).join('')}</select></label>` : ''}${
+      hasOscMix
+        ? Object.entries(module.oscillatorMix)
+            .map(([key, value]) =>
+              this.synthRange(module, `oscillatorMix.${key}`, {
+                min: 0,
+                max: 1.5,
+                step: 0.01,
+                label: `${key} mix`,
+                value,
+              })
+            )
+            .join('')
+        : ''
+    }${'detuneCents' in module ? this.synthRange(module, 'detuneCents', { min: 0, max: 48, step: 0.1, label: 'Detune cents' }) : ''}</section>`;
+    const filterPanel = ['cutoff', 'resonance', 'filterEnvelopeAmount', 'driveAmount'].some(
+      (key) => key in module
+    )
       ? `<section class="synth-panel"><strong>Filter / Drive</strong>${'cutoff' in module ? this.synthRange(module, 'cutoff', { min: 80, max: 12000, step: 1, label: 'Cutoff' }) : ''}${'resonance' in module ? this.synthRange(module, 'resonance', { min: 0.1, max: 24, step: 0.1, label: 'Resonance' }) : ''}${'filterEnvelopeAmount' in module ? this.synthRange(module, 'filterEnvelopeAmount', { min: 0, max: 6000, step: 1, label: 'Filter env' }) : ''}${'driveAmount' in module ? this.synthRange(module, 'driveAmount', { min: 0, max: 1.5, step: 0.01, label: 'Drive' }) : ''}</section>`
       : '';
-    const fmPanel = ['carrierRatio', 'modulatorRatio', 'modulationIndex', 'feedback'].some((key) => key in module)
+    const fmPanel = ['carrierRatio', 'modulatorRatio', 'modulationIndex', 'feedback'].some(
+      (key) => key in module
+    )
       ? `<section class="synth-panel"><strong>FM operator</strong>${'carrierRatio' in module ? this.synthNumber(module, 'carrierRatio', { min: 0.125, max: 16, step: 0.01, label: 'Carrier ratio' }) : ''}${'modulatorRatio' in module ? this.synthNumber(module, 'modulatorRatio', { min: 0.125, max: 16, step: 0.01, label: 'Mod ratio' }) : ''}${'modulationIndex' in module ? this.synthRange(module, 'modulationIndex', { min: 0, max: 24, step: 0.01, label: 'Index' }) : ''}${'feedback' in module ? this.synthRange(module, 'feedback', { min: 0, max: 1, step: 0.01, label: 'Feedback' }) : ''}</section>`
       : '';
-    const wavetablePanel = 'wavetable' in module
-      ? `<section class="synth-panel"><strong>Wavetable</strong><label>Table <select data-module-input="synth-param" data-param-key="wavetable" data-module-id="${this.escapeHtml(module.id)}">${['classic', 'bright', 'hollow', 'glass'].map((name) => `<option value="${name}" ${name === module.wavetable ? 'selected' : ''}>${name}</option>`).join('')}</select></label>${'morph' in module ? this.synthRange(module, 'morph', { min: 0, max: 1, step: 0.01, label: 'Morph' }) : ''}${'tableSize' in module ? this.synthNumber(module, 'tableSize', { min: 8, max: 128, step: 1, label: 'Table size' }) : ''}</section>`
-      : '';
+    const wavetablePanel =
+      'wavetable' in module
+        ? `<section class="synth-panel"><strong>Wavetable</strong><label>Table <select data-module-input="synth-param" data-param-key="wavetable" data-module-id="${this.escapeHtml(module.id)}">${['classic', 'bright', 'hollow', 'glass'].map((name) => `<option value="${name}" ${name === module.wavetable ? 'selected' : ''}>${name}</option>`).join('')}</select></label>${'morph' in module ? this.synthRange(module, 'morph', { min: 0, max: 1, step: 0.01, label: 'Morph' }) : ''}${'tableSize' in module ? this.synthNumber(module, 'tableSize', { min: 8, max: 128, step: 1, label: 'Table size' }) : ''}</section>`
+        : '';
     return `<div class="workspace-card module-editor-card synth-editor-card"><strong>Full synth control panel</strong><div class="synth-panel-grid">${oscillatorPanel}${filterPanel}${fmPanel}${wavetablePanel}${this.renderAdsrPanel(module)}</div><div class="button-row"><button type="button" data-module-action="audition-note" data-module-id="${this.escapeHtml(module.id)}">AUDITION C4</button><button type="button" data-module-action="audition-chord" data-module-id="${this.escapeHtml(module.id)}">AUDITION CHORD</button></div><p class="microcopy">Model-backed controls for oscillator, filter, envelope, FM and wavetable parameters where supported by this module.</p></div>`;
   }
 
@@ -1142,19 +1561,28 @@ class V11PeerDAW {
     const outgoing = this.patchBay.routes.filter((r) => r.from.moduleId === module.id);
     const special = [
       module.kind === 'clock' ? this.renderClockEditor(module) : '',
-      module.kind?.includes('effect') || Array.isArray(module.params) ? this.renderEffectEditor(module) : '',
-      module.outputs?.some((p) => p.type === PortType.AUDIO) && (('waveform' in module) || ('cutoff' in module) || typeof module.noteOn === 'function') ? this.renderSynthEditor(module) : '',
-    ].filter(Boolean).join('');
+      module.kind?.includes('effect') || Array.isArray(module.params)
+        ? this.renderEffectEditor(module)
+        : '',
+      module.outputs?.some((p) => p.type === PortType.AUDIO) &&
+      ('waveform' in module || 'cutoff' in module || typeof module.noteOn === 'function')
+        ? this.renderSynthEditor(module)
+        : '',
+    ]
+      .filter(Boolean)
+      .join('');
     return `<div class="module-focus module-editor"><article class="workspace-card module-editor-card"><strong>${this.escapeHtml(module.title)}</strong><p class="microcopy">${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</p>${this.renderModulePorts(module)}</article><article class="workspace-card module-editor-card"><strong>Patch summary</strong><p class="microcopy">Incoming: ${incoming.length} · Outgoing: ${outgoing.length}</p><div class="workspace-list route-mini-list">${[...incoming.map((r) => `← ${r.from.moduleId}.${r.from.outputId}`), ...outgoing.map((r) => `→ ${r.to.moduleId}.${r.to.inputId}`)].map((label) => `<span class="pill">${this.escapeHtml(label)}</span>`).join('') || '<span class="pill">unpatched</span>'}</div></article>${special || '<article class="workspace-card module-editor-card"><strong>Focused editor pending</strong><p class="microcopy">This module currently has the universal inspector. Add a domain editor from docs/MODULE_UI_BACKLOG.md.</p></article>'}</div>`;
   }
 
   renderMixerEditor() {
     const strips = this.mixerModules();
-    const rows = strips.map((module) => {
-      const channel = this.ensureMixerChannel(module);
-      return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label>Level <input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}"></label><label>Pan <input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
-    }).join('');
-    return `<div class="workspace-toolbar"><label>Master <input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}"></label><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
+    const rows = strips
+      .map((module) => {
+        const channel = this.ensureMixerChannel(module);
+        return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label>Level <input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}"></label><label>Pan <input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
+      })
+      .join('');
+    return `<div class="workspace-toolbar"><label>Master <input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}"></label><button type="button" data-module-action="unsolo-all">UNSOLO ALL</button><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
   }
 
   applyMixerChannel(moduleId) {
@@ -1164,14 +1592,22 @@ class V11PeerDAW {
     if ('gainValue' in module) module.gainValue = channel.gain;
     if ('panValue' in module) module.panValue = channel.pan;
     if ('muted' in module) module.muted = channel.muted;
-    if (module.output?.gain && this.runtime.context) module.output.gain.setTargetAtTime(channel.muted ? 0 : channel.gain, this.runtime.context.currentTime, 0.01);
-    if (module.pan?.pan && this.runtime.context) module.pan.pan.setTargetAtTime(channel.pan, this.runtime.context.currentTime, 0.01);
+    if (module.output?.gain && this.runtime.context)
+      module.output.gain.setTargetAtTime(
+        channel.muted ? 0 : channel.gain,
+        this.runtime.context.currentTime,
+        0.01
+      );
+    if (module.pan?.pan && this.runtime.context)
+      module.pan.pan.setTargetAtTime(channel.pan, this.runtime.context.currentTime, 0.01);
     module.apply?.();
   }
 
   setSynthParam(module, key, rawValue) {
     if (!module || !key) return;
-    const value = ['waveform', 'oscillatorType', 'wavetable', 'modulationMode'].includes(key) ? rawValue : Number(rawValue);
+    const value = ['waveform', 'oscillatorType', 'wavetable', 'modulationMode'].includes(key)
+      ? rawValue
+      : Number(rawValue);
     if (key.startsWith('oscillatorMix.')) {
       const mixKey = key.split('.')[1];
       module.oscillatorMix = { ...(module.oscillatorMix || {}), [mixKey]: Number(rawValue) };
@@ -1184,20 +1620,32 @@ class V11PeerDAW {
     }
     module.setParam?.(key, rawValue);
     if (key in module) module[key] = value;
-    if (key === 'cutoff' && module.filter && module.ctx) module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
-    if (key === 'resonance' && module.filter?.Q && module.ctx) module.filter.Q.setTargetAtTime(module.resonance, module.ctx.currentTime, 0.02);
-    if (key === 'driveAmount' && module.drive && 'curve' in module.drive && typeof module.setParam === 'function') module.setParam('driveAmount', module.driveAmount);
+    if (key === 'cutoff' && module.filter && module.ctx)
+      module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
+    if (key === 'resonance' && module.filter?.Q && module.ctx)
+      module.filter.Q.setTargetAtTime(module.resonance, module.ctx.currentTime, 0.02);
+    if (
+      key === 'driveAmount' &&
+      module.drive &&
+      'curve' in module.drive &&
+      typeof module.setParam === 'function'
+    )
+      module.setParam('driveAmount', module.driveAmount);
   }
 
   handleWorkspaceInput(event) {
+    const isLiveInput =
+      event.type === 'input' && (event.target.type === 'range' || event.target.type === 'number');
     const arrangementInput = event.target.closest('[data-arrangement-input]');
     if (arrangementInput) {
       const kind = arrangementInput.dataset.arrangementInput;
       if (kind === 'loop-start' || kind === 'loop-end') {
         const root = document.querySelector('#workspaceMainView');
         this.setArrangementLoop(
-          root?.querySelector('[data-arrangement-input="loop-start"]')?.value ?? this.arrangement.loopStartBeat,
-          root?.querySelector('[data-arrangement-input="loop-end"]')?.value ?? this.arrangement.loopEndBeat
+          root?.querySelector('[data-arrangement-input="loop-start"]')?.value ??
+            this.arrangement.loopStartBeat,
+          root?.querySelector('[data-arrangement-input="loop-end"]')?.value ??
+            this.arrangement.loopEndBeat
         );
       }
       if (kind === 'preview-beat') this.previewArrangementBeat(arrangementInput.value);
@@ -1228,7 +1676,7 @@ class V11PeerDAW {
       const note = module?.notes?.find((candidate) => candidate.id === input.dataset.noteId);
       if (!note) return;
       note.velocity = Number(input.value);
-      module.render?.();
+      if (!isLiveInput) module.render?.();
       this.publishProjectChange('piano-note-velocity');
       return;
     }
@@ -1236,8 +1684,10 @@ class V11PeerDAW {
     if (!module) return;
     if (type === 'clock-bpm') {
       module.bpm = Math.max(40, Math.min(260, Number(input.value) || module.bpm || 120));
-      module.render?.();
-      this.renderWorkspaceView();
+      if (!isLiveInput) {
+        module.render?.();
+        this.renderWorkspaceView();
+      }
       this.publishProjectChange('clock-bpm');
       return;
     }
@@ -1250,7 +1700,8 @@ class V11PeerDAW {
     }
     if (type === 'synth-cutoff') {
       module.cutoff = Number(input.value) || module.cutoff;
-      if (module.filter && module.ctx) module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
+      if (module.filter && module.ctx)
+        module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
       module.render?.();
       this.publishProjectChange('synth-cutoff');
       return;
@@ -1263,26 +1714,33 @@ class V11PeerDAW {
     }
     if (type === 'synth-param') {
       this.setSynthParam(module, input.dataset.paramKey, input.value);
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange('synth-param');
       return;
     }
     if (type === 'effect-param') {
       module.setParam?.(input.dataset.paramKey, input.value);
-      this.renderWorkspaceView();
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange('effect-param');
       return;
     }
     if (type === 'sampler-param') {
       module.setParam?.(input.dataset.paramKey, input.value);
-      this.renderWorkspaceView();
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange('sampler-param');
       return;
     }
     if (type === 'sampler-meta') {
       const key = input.dataset.metaKey;
-      const value = key === 'tags' ? input.value.split(',').map((item) => item.trim()).filter(Boolean) : input.value;
+      const value =
+        key === 'tags'
+          ? input.value
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean)
+          : input.value;
       module.setSampleMetadata?.({ [key]: value });
-      this.renderWorkspaceView();
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange('sampler-meta');
       return;
     }
@@ -1303,13 +1761,13 @@ class V11PeerDAW {
       const raw = input.value;
       const value = ['gain', 'pan'].includes(input.dataset.padKey) ? Number(raw) : raw;
       module.assignPad?.(input.dataset.padId, { ...current, [input.dataset.padKey]: value });
-      this.renderWorkspaceView();
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange('drum-pad');
       return;
     }
     if (type === 'multisampler-slices') {
       module.sliceCount = Math.max(1, Math.min(64, Number(input.value) || module.sliceCount || 8));
-      module.render?.();
+      if (!isLiveInput) module.render?.();
       this.publishProjectChange('multisampler-slices');
       return;
     }
@@ -1319,7 +1777,7 @@ class V11PeerDAW {
       const key = input.dataset.zoneKey;
       if (key === 'min' || key === 'max') zone[key] = module.midi?.(input.value) ?? zone[key];
       else zone[key] = input.value;
-      module.render?.();
+      if (!isLiveInput) module.render?.();
       this.publishProjectChange('multisampler-zone');
       return;
     }
@@ -1330,22 +1788,28 @@ class V11PeerDAW {
       return;
     }
     if (type === 'sequencer-velocity' || type === 'sequencer-micro') {
-      const patch = type === 'sequencer-velocity' ? { velocity: input.value } : { microTiming: input.value };
+      const patch =
+        type === 'sequencer-velocity' ? { velocity: input.value } : { microTiming: input.value };
       module.setStep?.(input.dataset.rowId, Number(input.dataset.stepIndex), patch);
-      this.renderWorkspaceView();
+      if (!isLiveInput) this.renderWorkspaceView();
       this.publishProjectChange(type);
       return;
     }
     if (type === 'ocra-row') {
       const rowIndex = Number(input.dataset.rowIndex);
-      const value = String(input.value || '').padEnd(32, '.').slice(0, 32);
+      const value = String(input.value || '')
+        .padEnd(32, '.')
+        .slice(0, 32);
       if (module.grid?.[rowIndex]) module.grid[rowIndex] = value.split('');
       module.renderGrid?.(null);
       this.publishProjectChange('ocra-row');
       return;
     }
     if (type === 'arp-notes') {
-      module.notes = input.value.split(',').map((note) => note.trim()).filter(Boolean);
+      module.notes = input.value
+        .split(',')
+        .map((note) => note.trim())
+        .filter(Boolean);
       module.velocities = new Map(module.notes.map((note) => [note, 0.7]));
       module.render?.();
       this.renderWorkspaceView();
@@ -1363,7 +1827,7 @@ class V11PeerDAW {
       const take = module.takes[Number(input.dataset.takeIndex)];
       if (!take) return;
       const key = input.dataset.takeKey;
-      take[key] = ['startMs','endMs'].includes(key) ? Number(input.value) || 0 : input.value;
+      take[key] = ['startMs', 'endMs'].includes(key) ? Number(input.value) || 0 : input.value;
       this.publishProjectChange('field-take');
       return;
     }
@@ -1381,7 +1845,32 @@ class V11PeerDAW {
     }
   }
 
+  handleDrumPadFileInput(event) {
+    const input = event.target.closest('.drum-pad-file-input');
+    if (!input) return;
+    const file = input.files?.[0];
+    if (!file) return;
+    const moduleId = input.dataset.moduleId;
+    const padId = input.dataset.padId;
+    const module = this.patchBay.modules.get(moduleId);
+    if (!module?.loadPadFile) return;
+    module.loadPadFile(padId, file).then(() => {
+      this.logText(`drum pad sample loaded: ${padId} = ${file.name}`);
+      this.renderWorkspaceView();
+      this.publishProjectChange('drum-pad-sample-loaded');
+    });
+  }
+
   handleModuleAction(action, target) {
+    if (action === 'unsolo-all') {
+      for (const channel of Object.values(this.mixerState.channels)) {
+        channel.solo = false;
+      }
+      for (const id of Object.keys(this.mixerState.channels)) this.applyMixerChannel(id);
+      this.renderWorkspaceView();
+      this.publishProjectChange('unsolo-all');
+      return;
+    }
     const moduleId = target.dataset.moduleId;
     const module = this.patchBay.modules.get(moduleId);
     if (!module) return;
@@ -1403,9 +1892,22 @@ class V11PeerDAW {
       const stepResolution = module.stepResolutionBeats || 0.25;
       const beat = Number(target.dataset.step) * stepResolution;
       const noteName = target.dataset.note;
-      const index = module.notes?.findIndex((note) => note.note === noteName && Math.round(note.beat / stepResolution) === Number(target.dataset.step));
+      const index = module.notes?.findIndex(
+        (note) =>
+          note.note === noteName &&
+          Math.round(note.beat / stepResolution) === Number(target.dataset.step)
+      );
       if (index >= 0) module.notes.splice(index, 1);
-      else module.notes.push({ id: `note-${Date.now()}-${module.notes.length}`, kind: PortType.MIDI, type: 'note-on', beat, note: noteName, velocity: 0.8, duration: stepResolution * 2 });
+      else
+        module.notes.push({
+          id: `note-${Date.now()}-${module.notes.length}`,
+          kind: PortType.MIDI,
+          type: 'note-on',
+          beat,
+          note: noteName,
+          velocity: 0.8,
+          duration: stepResolution * 2,
+        });
       module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
       module.render?.();
       this.renderWorkspaceView();
@@ -1414,7 +1916,15 @@ class V11PeerDAW {
     }
     if (action === 'add-note') {
       module.notes = module.notes || [];
-      module.notes.push({ id: `note-${Date.now()}`, kind: PortType.MIDI, type: 'note-on', beat: 0, note: 'C4', velocity: 0.8, duration: module.stepResolutionBeats || 0.25 });
+      module.notes.push({
+        id: `note-${Date.now()}`,
+        kind: PortType.MIDI,
+        type: 'note-on',
+        beat: 0,
+        note: 'C4',
+        velocity: 0.8,
+        duration: module.stepResolutionBeats || 0.25,
+      });
       module.render?.();
       this.renderWorkspaceView();
       this.publishProjectChange('piano-note-added');
@@ -1457,7 +1967,11 @@ class V11PeerDAW {
       return;
     }
     if (action === 'sampler-add-cue') {
-      module.addCue?.({ startMs: 0, bpm: module.sampleMetadata?.bpm || 120, name: `cue ${(module.sampleMetadata?.cues?.length || 0) + 1}` });
+      module.addCue?.({
+        startMs: 0,
+        bpm: module.sampleMetadata?.bpm || 120,
+        name: `cue ${(module.sampleMetadata?.cues?.length || 0) + 1}`,
+      });
       this.renderWorkspaceView();
       this.publishProjectChange('sampler-add-cue');
       return;
@@ -1469,13 +1983,36 @@ class V11PeerDAW {
       return;
     }
     if (action === 'drum-trigger-pad') {
-      module.trigger?.(target.dataset.padNote, 0.85);
-      this.logText(`drum pad trigger: ${module.title} ${target.dataset.padNote}`);
+      const note = target.dataset.padNote || 'C4';
+      if (typeof module.trigger === 'function') module.trigger(note, 0.85);
+      else if (typeof module.play === 'function') module.play(note, 0.85);
+      else if (typeof module.noteOn === 'function') {
+        module.noteOn(note, 0.7);
+        setTimeout(() => module.noteOff?.(note), 250);
+      }
+      this.logText(`trigger: ${module.title} ${note}`);
+      return;
+    }
+    if (action === 'drum-load-pad-file') {
+      const file = target.files?.[0];
+      if (file) {
+        module.loadPadFile?.(target.dataset.padId, file).then(() => {
+          this.logText(`drum pad sample loaded: ${target.dataset.padId} = ${file.name}`);
+          this.renderWorkspaceView();
+          this.publishProjectChange('drum-pad-sample-loaded');
+        });
+      }
       return;
     }
     if (action === 'multisampler-add-zone') {
       module.zones = module.zones || [];
-      module.zones.push({ name: `zone ${module.zones.length + 1}`, rootNote: 'C4', min: module.midi?.('C1') ?? 24, max: module.midi?.('C7') ?? 96, buffer: null });
+      module.zones.push({
+        name: `zone ${module.zones.length + 1}`,
+        rootNote: 'C4',
+        min: module.midi?.('C1') ?? 24,
+        max: module.midi?.('C7') ?? 96,
+        buffer: null,
+      });
       module.render?.();
       this.renderWorkspaceView();
       this.publishProjectChange('multisampler-add-zone');
@@ -1503,7 +2040,9 @@ class V11PeerDAW {
       return;
     }
     if (action === 'ocra-clear') {
-      module.grid = Array.from({ length: module.grid?.length || 14 }, () => new Array(32).fill('.'));
+      module.grid = Array.from({ length: module.grid?.length || 14 }, () =>
+        new Array(32).fill('.')
+      );
       module.renderGrid?.(null);
       this.renderWorkspaceView();
       this.publishProjectChange('ocra-clear');
@@ -1537,7 +2076,12 @@ class V11PeerDAW {
     }
     if (action === 'field-add-take') {
       module.takes = module.takes || [];
-      module.takes.push({ name: `take ${module.takes.length + 1}`, startMs: 0, endMs: module.buffer ? Math.round(module.buffer.duration * 1000) : 0, fileName: module.fileName || 'no sample loaded' });
+      module.takes.push({
+        name: `take ${module.takes.length + 1}`,
+        startMs: 0,
+        endMs: module.buffer ? Math.round(module.buffer.duration * 1000) : 0,
+        fileName: module.fileName || 'no sample loaded',
+      });
       this.renderWorkspaceView();
       this.publishProjectChange('field-add-take');
       return;
@@ -1554,7 +2098,11 @@ class V11PeerDAW {
       return;
     }
     if (action === 'field-promote-sample') {
-      this.sampleLibrary.addSample('/field-recorder', { filename: module.fileName || 'field take', sampleRef: `${module.id}/take`, tags: ['field-recorder'] });
+      this.sampleLibrary.addSample('/field-recorder', {
+        filename: module.fileName || 'field take',
+        sampleRef: `${module.id}/take`,
+        tags: ['field-recorder'],
+      });
       this.sampleLibrary.save();
       this.renderSamplePanels();
       this.logText(`field sample promoted: ${module.fileName || module.title}`);
@@ -1562,8 +2110,15 @@ class V11PeerDAW {
       return;
     }
     if (action === 'peer-connect') {
-      module.lastPilot = document.querySelector(`[data-module-input="peer-pilot"][data-module-id="${module.id}"]`)?.value || module.lastPilot || 'pilot';
-      module.connect?.(module.lastPilot).catch?.((error) => this.logText(`peer connect failed: ${error.message}`));
+      module.lastPilot =
+        document.querySelector(
+          `[data-module-input="peer-pilot"][data-module-id="${CSS.escape(module.id)}"]`
+        )?.value ||
+        module.lastPilot ||
+        'pilot';
+      module
+        .connect?.(module.lastPilot)
+        .catch?.((error) => this.logText(`peer connect failed: ${error.message}`));
       this.logText(`peer connect requested: ${module.lastPilot}`);
       return;
     }
@@ -1601,7 +2156,15 @@ class V11PeerDAW {
     if (action === 'waveform-apply-take') {
       const edit = this.ensureWaveformEdit(module);
       module.takes = module.takes || [];
-      module.takes.push({ name: `edit ${module.takes.length + 1}`, startMs: edit.trimStartMs, endMs: edit.trimEndMs, gain: edit.gain, reverse: edit.reverse, normalized: edit.normalized, fileName: module.fileName || 'sample' });
+      module.takes.push({
+        name: `edit ${module.takes.length + 1}`,
+        startMs: edit.trimStartMs,
+        endMs: edit.trimEndMs,
+        gain: edit.gain,
+        reverse: edit.reverse,
+        normalized: edit.normalized,
+        fileName: module.fileName || 'sample',
+      });
       this.logText(`waveform edit applied as take: ${module.title}`);
       this.renderWorkspaceView();
       this.publishProjectChange('waveform-apply-take');
@@ -1610,15 +2173,206 @@ class V11PeerDAW {
 
   moduleClipSummary(module) {
     const serialized = module.serialize?.() || {};
-    const patterns = serialized.patterns || serialized.sequence || serialized.notes || serialized.steps || [];
+    const patterns =
+      serialized.patterns || serialized.sequence || serialized.notes || serialized.steps || [];
     const count = Array.isArray(patterns) ? patterns.length : Object.keys(patterns || {}).length;
     return {
       id: module.id,
       title: module.title,
       kind: module.kind,
       count,
-      hasTransport: module.inputs?.some((p) => p.type === PortType.CLOCK) || module.outputs?.some((p) => p.type === PortType.CLOCK),
+      hasTransport:
+        module.inputs?.some((p) => p.type === PortType.CLOCK) ||
+        module.outputs?.some((p) => p.type === PortType.CLOCK),
     };
+  }
+
+  detectSignalChains() {
+    const modules = this.workspaceModules();
+    const adj = new Map();
+    const inbound = new Map();
+    for (const m of modules) {
+      adj.set(m.id, new Set());
+      inbound.set(m.id, new Set());
+    }
+    for (const route of this.patchBay.routes) {
+      adj.get(route.from.moduleId)?.add(route.to.moduleId);
+      inbound.get(route.to.moduleId)?.add(route.from.moduleId);
+    }
+    for (const edge of this.routingGraph.edges) {
+      if (edge.to === 'destination') continue;
+      adj.get(edge.from)?.add(edge.to);
+      inbound.get(edge.to)?.add(edge.from);
+    }
+    const visited = new Set();
+    const chains = [];
+    const sources = modules.filter((m) => (inbound.get(m.id)?.size || 0) === 0);
+    const walk = (id, chain) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      chain.push(id);
+      for (const next of adj.get(id) || []) walk(next, chain);
+    };
+    for (const source of sources) {
+      if (visited.has(source.id)) continue;
+      const chain = [];
+      walk(source.id, chain);
+      if (chain.length > 0) chains.push(chain);
+    }
+    for (const m of modules) {
+      if (!visited.has(m.id)) {
+        const chain = [];
+        walk(m.id, chain);
+        if (chain.length > 0) chains.push(chain);
+      }
+    }
+    return chains;
+  }
+
+  chainModuleKindLabel(module) {
+    if (module.kind === 'clock') return 'clock';
+    if (
+      module.kind === 'midi-generator' ||
+      module.kind === 'sequencer' ||
+      Array.isArray(module.rows) ||
+      Array.isArray(module.grid)
+    )
+      return 'seq';
+    if (this.isSamplerModule(module)) return 'sampler';
+    if (module.kind === 'audio-source' || typeof module.noteOn === 'function') return 'synth';
+    if (module.kind?.includes('effect') || Array.isArray(module.params)) return 'fx';
+    if (module.kind === 'network') return 'net';
+    return 'util';
+  }
+
+  chainKindBorderClass(kind) {
+    const map = {
+      clock: 'kind-clock',
+      seq: 'kind-midi-generator',
+      synth: 'kind-instrument',
+      sampler: 'kind-instrument',
+      fx: 'kind-effect',
+      net: 'kind-network',
+      util: 'kind-utility',
+    };
+    return map[kind] || '';
+  }
+
+  renderChainNodeControls(module) {
+    const kind = this.chainModuleKindLabel(module);
+    const parts = [];
+    if (kind === 'clock') {
+      parts.push(
+        `<label>BPM <input data-module-input="clock-bpm" data-module-id="${this.escapeHtml(module.id)}" type="number" min="40" max="260" step="1" value="${this.escapeHtml(module.bpm || 120)}"></label>`
+      );
+    }
+    if (kind === 'synth') {
+      const waveforms = ['sine', 'triangle', 'sawtooth', 'square'];
+      const wf = module.waveform || module.oscillatorType || 'triangle';
+      if ('waveform' in module || 'oscillatorType' in module)
+        parts.push(
+          `<label>Wave <select data-module-input="synth-param" data-param-key="waveform" data-module-id="${this.escapeHtml(module.id)}">${waveforms.map((w) => `<option value="${w}" ${w === wf ? 'selected' : ''}>${w}</option>`).join('')}</select></label>`
+        );
+      if ('cutoff' in module)
+        parts.push(
+          `<label>Cutoff <input data-module-input="synth-param" data-param-key="cutoff" data-module-id="${this.escapeHtml(module.id)}" type="range" min="80" max="12000" step="1" value="${this.escapeHtml(module.cutoff || 2000)}"></label>`
+        );
+      if ('attack' in module)
+        parts.push(
+          `<label>Atk <input data-module-input="synth-param" data-param-key="attack" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0.001" max="2" step="0.001" value="${this.escapeHtml(module.attack ?? 0.01)}"></label>`
+        );
+      if ('release' in module)
+        parts.push(
+          `<label>Rel <input data-module-input="synth-param" data-param-key="release" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0.001" max="4" step="0.001" value="${this.escapeHtml(module.release ?? 0.1)}"></label>`
+        );
+    }
+    if (kind === 'sampler' && module.pads instanceof Map) {
+      const pads = [...module.pads.values()];
+      const loaded = pads.filter((p) => p.buffer).length;
+      parts.push(`<span class="microcopy">${loaded}/${pads.length} pads loaded</span>`);
+    }
+    if (kind === 'sampler' && !(module.pads instanceof Map)) {
+      parts.push(
+        `<span class="microcopy">${this.escapeHtml(module.fileName || 'no sample')}</span>`
+      );
+      if ('rootNote' in module)
+        parts.push(
+          `<label>Root <input data-module-input="sampler-param" data-param-key="rootNote" data-module-id="${this.escapeHtml(module.id)}" type="text" value="${this.escapeHtml(module.rootNote || 'C4')}"></label>`
+        );
+    }
+    if (kind === 'fx') {
+      const fxParams = Array.isArray(module.params) ? module.params.slice(0, 3) : [];
+      for (const param of fxParams) {
+        parts.push(
+          `<label>${this.escapeHtml(param.label || param.key)} <input data-module-input="effect-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(param.key)}" type="range" min="${this.escapeHtml(param.min)}" max="${this.escapeHtml(param.max)}" step="${this.escapeHtml(param.step || 0.01)}" value="${this.escapeHtml(module[param.key])}"></label>`
+        );
+      }
+    }
+    if (kind === 'seq') {
+      const noteCount = Array.isArray(module.notes)
+        ? module.notes.length
+        : Array.isArray(module.rows)
+          ? module.rows.reduce((sum, r) => sum + r.steps.filter((s) => s.enabled).length, 0)
+          : 0;
+      parts.push(`<span class="microcopy">${noteCount} active steps</span>`);
+    }
+    const channel = this.mixerState.channels[module.id];
+    if (channel || module.outputs?.some((p) => p.type === PortType.AUDIO)) {
+      const ch = channel || this.ensureMixerChannel(module);
+      parts.push(
+        `<label>Level <input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(ch.gain)}"></label>`
+      );
+    }
+    return parts.join('');
+  }
+
+  chainConnectionType(fromId, toId) {
+    const hasAudio = this.routingGraph.edges.some(
+      (e) => e.from === fromId && e.to === toId && e.type === 'audio'
+    );
+    if (hasAudio) return 'audio';
+    const route = this.patchBay.routes.find(
+      (r) => r.from.moduleId === fromId && r.to.moduleId === toId
+    );
+    if (!route) return 'control';
+    const fromModule = this.patchBay.modules.get(fromId);
+    const outPort = fromModule?.outputs?.find((p) => p.id === route.from.outputId);
+    if (outPort?.type === PortType.MIDI) return 'midi';
+    if (outPort?.type === PortType.CLOCK) return 'control';
+    return 'control';
+  }
+
+  renderChainView() {
+    const chains = this.detectSignalChains();
+    const assigned = new Set(chains.flat());
+    const orphans = this.workspaceModules().filter((m) => !assigned.has(m.id));
+
+    const chainCards = chains
+      .map((chain, _chainIndex) => {
+        const modules = chain.map((id) => this.patchBay.modules.get(id)).filter(Boolean);
+        if (!modules.length) return '';
+        const label =
+          modules.length === 1
+            ? modules[0].title
+            : `${modules[0].title} → ${modules[modules.length - 1].title}`;
+        const nodeHtmls = modules.map((module) => {
+          const kind = this.chainModuleKindLabel(module);
+          return `<div class="chain-node ${this.chainKindBorderClass(kind)}"><div class="chain-node-head"><strong>${this.escapeHtml(module.title)}</strong><span class="chain-node-kind">${kind}</span></div><div class="chain-node-controls">${this.renderChainNodeControls(module)}</div><div class="chain-node-actions"><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">OPEN</button><button type="button" data-module-action="drum-trigger-pad" data-module-id="${this.escapeHtml(module.id)}" data-pad-note="C4" style="${typeof module.trigger === 'function' || typeof module.play === 'function' || typeof module.noteOn === 'function' ? '' : 'display:none'}">PLAY</button></div></div>`;
+        });
+        const nodes = nodeHtmls.reduce((acc, html, i) => {
+          if (i === 0) return html;
+          const connType = this.chainConnectionType(modules[i - 1].id, modules[i].id);
+          return `${acc}<div class="chain-arrow conn-${connType}"></div>${html}`;
+        }, '');
+        return `<article class="signal-chain"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-flow">${nodes}</div></article>`;
+      })
+      .join('');
+
+    const orphanChips = orphans.length
+      ? `<div class="chain-orphans"><span class="microcopy">${orphans.length} unpatched</span><div class="chain-orphan-grid">${orphans.map((m) => `<button class="chain-orphan-chip" type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(m.id)}">${this.escapeHtml(m.title)}</button>`).join('')}</div></div>`
+      : '';
+
+    return `<div class="chain-list">${chainCards || '<p class="microcopy">No modules yet. Add modules and patch them to see signal chains.</p>'}${orphanChips}</div>`;
   }
 
   renderWorkspaceView() {
@@ -1630,18 +2384,27 @@ class V11PeerDAW {
     const routeCount = this.patchBay.routes.length;
     const audioRoutes = this.routingGraph.edges.filter((edge) => edge.type === 'audio').length;
     const view = this.workspaceView || 'session';
+    if (view === 'chains') {
+      root.innerHTML = this.renderChainView();
+      return;
+    }
     if (view === 'session') {
-      const participantCount = (activeSession?.participants?.length || 1) + this.localSessionPeers.size + this.peerList.length;
+      const participantCount =
+        (activeSession?.participants?.length || 1) +
+        this.localSessionPeers.size +
+        this.peerList.length;
       root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
       return;
     }
     if (view === 'clips') {
       this.ensureDefaultClipSlots();
-      const rows = this.clipSlots.map((slot) => {
-        const active = Boolean(slot.activeClipAt(this.currentBeat));
-        const module = this.patchBay.modules.get(slot.moduleId);
-        return `<div class="clip-slot-row ${active ? 'active' : ''}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">${this.escapeHtml(module?.title || slot.moduleId)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
-      }).join('');
+      const rows = this.clipSlots
+        .map((slot) => {
+          const active = Boolean(slot.activeClipAt(this.currentBeat));
+          const module = this.patchBay.modules.get(slot.moduleId);
+          return `<div class="clip-slot-row ${active ? 'active' : ''}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">${this.escapeHtml(module?.title || slot.moduleId)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
+        })
+        .join('');
       root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="create">CREATE CLIP</button><button type="button" data-clip-action="place-all">PLACE ALL</button><button type="button" data-clip-action="clear-arrangement">CLEAR ARRANGEMENT</button><span class="microcopy">beat ${this.escapeHtml(this.currentBeat)} · ${this.clipSlots.length} slots · backed by ClipSlot/Clip core</span></div><div class="workspace-list">${rows || '<p class="microcopy">No clip slots yet. Add a piano roll, OCRA grid, or sequencer, then create a clip.</p>'}</div>`;
       return;
     }
@@ -1653,7 +2416,14 @@ class V11PeerDAW {
       root.innerHTML = this.renderMixerEditor();
       return;
     }
-    const focused = modules.find((module) => module.id === this.focusedModuleId) || modules.find((module) => module.id === document.querySelector('.module-card:hover')?.dataset.moduleId) || modules.find((module) => Array.isArray(module.notes)) || modules.find((module) => module.kind === 'midi-generator') || modules[0];
+    const focused =
+      modules.find((module) => module.id === this.focusedModuleId) ||
+      modules.find(
+        (module) => module.id === document.querySelector('.module-card:hover')?.dataset.moduleId
+      ) ||
+      modules.find((module) => Array.isArray(module.notes)) ||
+      modules.find((module) => module.kind === 'midi-generator') ||
+      modules[0];
     if (!focused) {
       root.innerHTML = '<p class="microcopy">No module selected.</p>';
       return;
@@ -1664,9 +2434,12 @@ class V11PeerDAW {
         ? this.renderPianoRollEditor(focused)
         : this.isSamplerModule(focused)
           ? this.renderSamplerEditor(focused)
-          : focused.id?.includes('field') || focused.title?.toLowerCase?.().includes('field recorder')
+          : focused.id?.includes('field') ||
+              focused.title?.toLowerCase?.().includes('field recorder')
             ? this.renderFieldRecorderEditor(focused)
-            : focused.kind === 'network' || focused.id?.includes('peer') || focused.id?.includes('wiring')
+            : focused.kind === 'network' ||
+                focused.id?.includes('peer') ||
+                focused.id?.includes('wiring')
               ? this.renderPeerMonitorEditor(focused)
               : this.renderGenericModuleEditor(focused);
     root.innerHTML = detail;
@@ -1697,17 +2470,19 @@ class V11PeerDAW {
       listEl.innerHTML = rows.length
         ? rows
             .map(
-              (p) => `<div class="peer-item"><span class="peer-dot"></span>${this.escapeHtml(p.username || p.name || p.id || 'pilot')} <small>${this.escapeHtml(p.role || 'participant')}</small></div>`
+              (p) =>
+                `<div class="peer-item"><span class="peer-dot"></span>${this.escapeHtml(p.username || p.name || p.id || 'pilot')} <small>${this.escapeHtml(p.role || 'participant')}</small></div>`
             )
             .join('')
         : '<div class="peer-item dim">local pilot waiting for peers</div>';
     }
-    this.renderWorkspaceView();
+    if (this.workspaceView === 'session') this.renderWorkspaceView();
   }
 
   async bootstrapDefaultPeernetSession({ force = false } = {}) {
     if (this.peernet.started && !force) return this.peernet.sessions?.getActiveSession?.() || null;
-    const username = this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
+    const username =
+      this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
     const pilotEl = document.querySelector('#pilotName');
     if (pilotEl) pilotEl.value = username;
     this.subLobby.setUsername(username);
@@ -1739,7 +2514,9 @@ class V11PeerDAW {
     const statusEl = document.querySelector('#subLobbyStatus');
     const listEl = document.querySelector('#subLobbyPeerList');
     if (statusEl) {
-      const room = state.subLobbyId ? state.subLobbyId.replace('v11-peer-daw-sublobby-', '') : 'none';
+      const room = state.subLobbyId
+        ? state.subLobbyId.replace('v11-peer-daw-sublobby-', '')
+        : 'none';
       statusEl.textContent = `sub-lobby: ${state.role} · ${room} · ${state.joinBlocked ? 'blocked' : 'open'}`;
     }
     if (listEl) {
@@ -1748,7 +2525,7 @@ class V11PeerDAW {
         ? peers
             .map(
               ([id, peer]) =>
-                `<div class="peer-item"><span class="peer-dot"></span>${peer.username || id}</div>`
+                `<div class="peer-item"><span class="peer-dot"></span>${this.escapeHtml(peer.username || id)}</div>`
             )
             .join('')
         : '<div class="peer-item dim">no sub-lobby peers yet</div>';
@@ -1783,7 +2560,10 @@ class V11PeerDAW {
   }
 
   escapeHtml(value = '') {
-    return String(value).replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]);
+    return String(value).replace(
+      /[&<>"]/g,
+      (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]
+    );
   }
 
   async importSampleLibraryFiles(files) {
@@ -1801,10 +2581,14 @@ class V11PeerDAW {
   }
 
   async importSampleLibraryJsonFile(file) {
-    this.sampleLibrary.importSnapshot(JSON.parse(await file.text())).save();
-    document.querySelector('#sampleLibraryJson').value = this.sampleLibrary.exportJson();
-    this.renderSamplePanels();
-    this.logText(`global sample library JSON loaded: ${file.name}`);
+    try {
+      this.sampleLibrary.importSnapshot(JSON.parse(await file.text())).save();
+      document.querySelector('#sampleLibraryJson').value = this.sampleLibrary.exportJson();
+      this.renderSamplePanels();
+      this.logText(`global sample library JSON loaded: ${file.name}`);
+    } catch (error) {
+      this.logText(`sample library import failed: ${error.message}`);
+    }
   }
 
   exportSampleLibraryJson() {
@@ -1827,18 +2611,7 @@ class V11PeerDAW {
   renderSampleLibraryTree() {
     const root = document.querySelector('#sampleLibraryTree');
     if (!root) return;
-    const renderDir = (dir, depth = 0) => {
-      const sampleRows = (dir.samples || [])
-        .map(
-          (sample) =>
-            `<div class="sample-library-sample" draggable="true" data-sample-id="${this.escapeHtml(sample.id)}" style="margin-left:${depth * 10}px"><strong>${this.escapeHtml(sample.filename)}</strong><small>${this.escapeHtml(sample.sampleLengthMs || 0)}ms · ${this.escapeHtml(sample.type || sample.mime || 'audio')}</small><span class="pill">${this.escapeHtml(sample.source || 'local')}</span></div>`
-        )
-        .join('');
-      const childRows = (dir.dirs || []).map((child) => renderDir(child, depth + 1)).join('');
-      const label = dir.name === 'root' ? 'library' : dir.name;
-      return `<div class="sample-library-dir" style="margin-left:${depth * 8}px"><strong>/${this.escapeHtml(label)}</strong>${sampleRows}${childRows}</div>`;
-    };
-    root.innerHTML = renderDir(this.sampleLibrary.root);
+    root.innerHTML = renderSampleLibraryTreeHtml(this.sampleLibrary.root);
   }
 
   renderProjectSampleUsage() {
@@ -1847,31 +2620,25 @@ class V11PeerDAW {
     const project = this.serializeRig();
     const usage = detectProjectSampleUsage(project, this.sampleLibrary).map((slot) => {
       const progress = this.sampleSyncProgress.get(slot.id)?.progress;
-      return progress !== undefined ? { ...slot, availability: progress >= 1 ? 'available' : 'syncing', progress } : slot;
+      return progress !== undefined
+        ? { ...slot, availability: progress >= 1 ? 'available' : 'syncing', progress }
+        : slot;
     });
-    if (!usage.length) {
-      root.innerHTML = '<p class="microcopy">No project sample references yet.</p>';
-      return;
-    }
-    root.innerHTML = usage
-      .map((slot) => {
-        const progress = Math.round((slot.progress ?? (slot.availability === 'missing' ? 0 : 1)) * 100);
-        return `<article class="sample-slot-card state-${this.escapeHtml(slot.availability)}" data-sample-slot="${this.escapeHtml(slot.id)}" data-sample-ref="${this.escapeHtml(slot.sampleRef)}" data-filename="${this.escapeHtml(slot.filename)}" style="--sample-fill:${progress}%"><div class="sample-slot-fill"></div><strong>${this.escapeHtml(slot.filename)}</strong><small>${this.escapeHtml(slot.moduleTitle)} · ${this.escapeHtml(slot.sampleRef)}</small><span class="pill">${this.escapeHtml(slot.availability)}</span><span class="microcopy">${this.escapeHtml(slot.sampleLengthMs || '?')}ms · ${this.escapeHtml(slot.type || 'unknown type')}</span><div class="button-row"><button type="button" data-sample-action="query-peer">QUERY PEERS</button><button type="button" data-sample-action="pick-upload">UPLOAD / REPLACE</button></div></article>`;
-      })
-      .join('');
+    root.innerHTML = renderProjectSampleUsageHtml(usage);
   }
 
   sendSampleSyncPacket(packet) {
     this.subLobby?.subLobby?.broadcast?.({ type: packet.type, payload: packet.payload });
   }
 
-  handleSubLobbySampleData(from, data = {}) {
+  handleSubLobbySampleData(_from, data = {}) {
     if (data.type === SAMPLE_PACKET_TYPES.request) {
       const sample =
         this.sampleLibrary.findSample(data.payload?.sampleRef) ||
         this.sampleLibrary.findSample(data.payload?.filename);
       if (!sample) return;
-      const bytes = sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
+      const bytes =
+        sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
       this.subLobby?.subLobby?.broadcast?.({
         type: SAMPLE_PACKET_TYPES.start,
         payload: {
@@ -1973,9 +2740,12 @@ class V11PeerDAW {
       return;
     const username =
       this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
-    document.querySelector('#pilotName').value = username;
+    const pilotEl = document.querySelector('#pilotName');
+    if (pilotEl) pilotEl.value = username;
     this.subLobby.setUsername(username);
-    this.subLobby.connect().catch((error) => this.logText(`app-hub lobby failed: ${error.message}`));
+    this.subLobby
+      .connect()
+      .catch((error) => this.logText(`app-hub lobby failed: ${error.message}`));
     this.peernet.start({
       username,
       targetPeerId: this.targetPeerId,
@@ -2037,7 +2807,9 @@ class V11PeerDAW {
       '<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div><div class="mount"></div>';
     this.modulesEl.appendChild(card);
     module.mount(card.querySelector('.mount'));
-    module.addEventListener?.('sample-library-sync', (event) => this.syncModuleMetadataToSampleLibrary(event.detail));
+    module.addEventListener?.('sample-library-sync', (event) =>
+      this.syncModuleMetadataToSampleLibrary(event.detail)
+    );
     card.querySelector('.remove').addEventListener('click', () => this.removeModule(module.id));
     card.querySelector('.focus').addEventListener('click', () => {
       this.focusedModuleId = module.id;
@@ -2069,8 +2841,8 @@ class V11PeerDAW {
   }
 
   removeModule(moduleId) {
-    document.querySelector(`[data-module-id="${moduleId}"]`)?.remove();
-    document.querySelector(`[data-strip-id="${moduleId}"]`)?.remove();
+    document.querySelector(`[data-module-id="${CSS.escape(moduleId)}"]`)?.remove();
+    document.querySelector(`[data-strip-id="${CSS.escape(moduleId)}"]`)?.remove();
     this.patchBay.removeModule(moduleId);
     this.routingGraph.removeNode(moduleId);
     this.syncAudioGraph();
@@ -2104,13 +2876,13 @@ class V11PeerDAW {
   }
 
   addMixerStrip(module) {
-    if (this.mixerStripEl.querySelector(`[data-strip-id="${module.id}"]`)) return;
+    if (this.mixerStripEl.querySelector(`[data-strip-id="${CSS.escape(module.id)}"]`)) return;
     const strip = document.createElement('div');
     strip.className = 'strip';
     strip.dataset.stripId = module.id;
     strip.innerHTML = `
-      <strong title="${module.title}">${module.title}</strong>
-      <small>${module.kind}</small>
+      <strong title="${this.escapeHtml(module.title)}">${this.escapeHtml(module.title)}</strong>
+      <small>${this.escapeHtml(module.kind)}</small>
       <input type="range" min="0" max="100" value="70">
     `;
     const slider = strip.querySelector('input');
@@ -2124,7 +2896,7 @@ class V11PeerDAW {
     const packetRoutes = this.patchBay.routes
       .map(
         (route) => `
-      <li><code>${route.from.moduleId}:${route.from.outputId}</code> → <code>${route.to.moduleId}:${route.to.inputId}</code></li>
+      <li><code>${this.escapeHtml(route.from.moduleId)}:${this.escapeHtml(route.from.outputId)}</code> → <code>${this.escapeHtml(route.to.moduleId)}:${this.escapeHtml(route.to.inputId)}</code></li>
     `
       )
       .join('');
@@ -2132,7 +2904,7 @@ class V11PeerDAW {
       .filter((edge) => edge.type === 'audio')
       .map(
         (edge) => `
-      <li><code>${edge.from}:audio</code> ⇢ <code>${edge.to}:audio</code></li>
+      <li><code>${this.escapeHtml(edge.from)}:audio</code> ⇢ <code>${this.escapeHtml(edge.to)}:audio</code></li>
     `
       )
       .join('');
@@ -2145,8 +2917,7 @@ class V11PeerDAW {
       ]
         .filter(Boolean)
         .join('') || '<li class="dim">no routes yet</li>';
-    this.updateStats();
-    this.renderWorkspaceView();
+    this.updateTransportStats();
   }
 
   renderPatchCanvas() {
@@ -2160,13 +2931,15 @@ class V11PeerDAW {
     document.querySelector('#moduleCount').textContent = `${this.patchBay.modules.size} modules`;
     document.querySelector('#routeCount').textContent =
       `${this.patchBay.routes.length} packet / ${audioRouteCount} audio routes`;
-    this.renderWorkspaceView();
+    this.updateTransportStats();
   }
 
   handlePatchGraphChange() {
     this.syncAudioGraph();
     this.renderRoutes();
     this.updateStats();
+    this.renderWorkspaceView();
+    this.publishProjectChange('patch-graph-change');
   }
 
   async replaceWithPianoRoll(moduleId, pianoRollConfig) {
@@ -2203,11 +2976,12 @@ class V11PeerDAW {
       return;
     }
     this.peernet.broadcastPacket(packet, outputId);
+    if (packet.kind === PortType.CLOCK) return;
     const row = document.createElement('div');
     row.className = `packet ${packet.kind}`;
     row.textContent = `${from}:${outputId} :: ${packet.kind}/${packet.type}${packet.note ? ` ${packet.note}` : ''}`;
     this.logEl.prepend(row);
-    while (this.logEl.children.length > 30) this.logEl.lastChild.remove();
+    while (this.logEl.children.length > 50) this.logEl.lastChild.remove();
   }
 
   logText(text) {
@@ -2231,32 +3005,24 @@ class V11PeerDAW {
     this.graphSync.apply(this.routingGraph);
   }
 
-  projectSource() {
+  projectSnapshotInput() {
     return {
       modules: [...this.patchBay.modules.values()],
       routes: this.patchBay.routes,
-      clips: this.serializeClipState(),
-      arrangement: this.arrangement.serialize(),
-      mixer: this.serializeMixerState(),
-      mixer: this.serializeMixerState(),
+      clipState: this.serializeClipState(),
+      arrangement: this.arrangement,
+      mixerState: this.mixerState,
+      routingGraph: this.routingGraph,
+      patchCanvas: this.patchCanvas,
     };
   }
 
+  projectSource() {
+    return createProjectSource(this.projectSnapshotInput());
+  }
+
   serializeRig() {
-    return {
-      version: 1,
-      modules: [...this.patchBay.modules.values()].map(
-        (module) =>
-          module.serialize?.() || {
-            id: module.id,
-            kind: module.kind,
-            title: module.title,
-          }
-      ),
-      routes: this.patchBay.routes,
-      clips: this.serializeClipState(),
-      arrangement: this.arrangement.serialize(),
-    };
+    return serializeRigSnapshot(this.projectSnapshotInput());
   }
 
   selectedProjectExportMode() {
@@ -2283,13 +3049,21 @@ class V11PeerDAW {
     const clipboardText = await navigator.clipboard?.readText?.().catch(() => '');
     const text = clipboardText || field.value;
     field.value = text;
-    this.applyRig(parseProjectPayload(text));
+    try {
+      this.applyRig(parseProjectPayload(text));
+    } catch (error) {
+      this.logText(`project paste failed: ${error.message}`);
+    }
   }
 
   async importProjectFile(file) {
-    const payload = file.name.endsWith('.zip') ? await file.arrayBuffer() : await file.text();
-    this.applyRig(parseProjectPayload(payload));
-    this.logText(`project imported: ${file.name}`);
+    try {
+      const payload = file.name.endsWith('.zip') ? await file.arrayBuffer() : await file.text();
+      this.applyRig(parseProjectPayload(payload));
+      this.logText(`project imported: ${file.name}`);
+    } catch (error) {
+      this.logText(`project import failed: ${error.message}`);
+    }
   }
 
   async downloadProject() {
@@ -2321,47 +3095,68 @@ class V11PeerDAW {
   }
 
   async rebuildRigFromProject(project) {
-    for (const module of [...this.patchBay.modules.values()]) this.removeModule(module.id);
-    this.patchBay.routes = [];
-    this.routingGraph = new RoutingGraph();
-    this.bindPatchCanvas();
-    this.mixer = null;
-    this.clock = null;
-    this.restoreClipState(project);
-    this.restoreMixerState(project);
+    const wasSuppressed = this.suppressProjectBroadcast;
+    this.suppressProjectBroadcast = true;
+    try {
+      for (const module of [...this.patchBay.modules.values()]) this.removeModule(module.id);
+      this.patchBay.routes = [];
+      this.routingGraph = new RoutingGraph();
+      this.bindPatchCanvas();
+      this.mixer = null;
+      this.clock = null;
+      this.restoreClipState(project);
+      this.restoreMixerState(project);
 
-    for (const moduleData of project.modules || []) {
-      const type = moduleData.moduleType || moduleData.kind;
-      const factory =
-        moduleFactories[type] || moduleFactories[moduleData.kind] || moduleFactories.synth;
-      const module = factory();
-      module.id = moduleData.id || module.id;
-      module.title = moduleData.title || module.title;
-      module.hydrate?.(moduleData);
-      if (module.kind === 'clock') this.clock = module;
-      if (type === 'master' || moduleData.id === 'main-mixer') this.mixer = module;
-      await this.addModule(module, { autoConnectAudio: true });
+      for (const moduleData of project.modules || []) {
+        const type = moduleData.moduleType || moduleData.kind;
+        const factory =
+          moduleFactories[type] || moduleFactories[moduleData.kind] || moduleFactories.synth;
+        const module = factory();
+        module.id = moduleData.id || module.id;
+        module.title = moduleData.title || module.title;
+        module.hydrate?.(moduleData);
+        if (module.kind === 'clock') this.clock = module;
+        if (type === 'master' || moduleData.id === 'main-mixer') this.mixer = module;
+        await this.addModule(module, { autoConnectAudio: true });
+      }
+
+      this.patchBay.routes = Array.from(project.routes || []);
+      this.restoreRoutingGraphState(project);
+      this.patchCanvas?.restorePositions?.(project.canvasPositions || {});
+      this.renderRoutes();
+      this.renderPatchCanvas();
+      this.ensureDefaultClipSlots();
+      this.updateStats();
+      this.renderWorkspaceView();
+    } finally {
+      this.suppressProjectBroadcast = wasSuppressed;
     }
+    if (!this.suppressProjectBroadcast) this.publishProjectChange('project-rebuilt');
+  }
 
-    this.patchBay.routes = Array.from(project.routes || []);
+  restoreRoutingGraphState(project = {}) {
+    const graph = project.graph || null;
+    if (graph) {
+      this.routingGraph.clearEdges();
+      for (const node of graph.nodes || []) {
+        if (node?.id) this.routingGraph.addNode(node.id, node);
+      }
+      for (const edge of graph.edges || []) {
+        if (edge?.from && edge?.to)
+          this.routingGraph.connect(edge.from, edge.to, edge.type || 'audio');
+      }
+      this.routingGraph.chains.clear();
+      for (const [channelId, effects] of graph.chains || []) {
+        this.routingGraph.setChain(channelId, effects);
+      }
+      return;
+    }
     for (const route of this.patchBay.routes) {
       this.routingGraph.connect(route.from.moduleId, route.to.moduleId, route.from.outputId);
     }
-    this.renderRoutes();
-    this.renderPatchCanvas();
-    this.ensureDefaultClipSlots();
-    this.updateStats();
-    this.renderWorkspaceView();
-    this.publishProjectChange('project-rebuilt');
   }
 
   applyRig(payload) {
-    if (payload?.archiveBytes) {
-      this.logText(
-        'archive import detected; JSON project restore is available after extracting project.json'
-      );
-      return;
-    }
     this.rebuildRigFromProject(payload).catch((error) =>
       this.logText(`project import failed: ${error.message}`)
     );

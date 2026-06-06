@@ -10,12 +10,20 @@ export const SAMPLE_PACKET_TYPES = Object.freeze({
 
 function compactObject(input) {
   return Object.fromEntries(
-    Object.entries(input).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    Object.entries(input).filter(
+      ([, value]) => value !== undefined && value !== null && value !== ''
+    )
   );
 }
 
 function uniqueStrings(values = []) {
-  return [...new Set(Array.from(values).map((value) => String(value).trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      Array.from(values)
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 function normalizeMs(value, fallback = 0) {
@@ -63,7 +71,10 @@ export function normalizeSampleMetadata(input = {}) {
 }
 
 export function tapTempoBpm(taps = []) {
-  const normalized = taps.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const normalized = taps
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
   if (normalized.length < 2) return 0;
   const intervals = [];
   for (let index = 1; index < normalized.length; index += 1) {
@@ -78,11 +89,18 @@ export function tapTempoBpm(taps = []) {
 export function deriveBpmFromInterval({ startMs = 0, endMs = 0, bars = 1, beatsPerBar = 4 } = {}) {
   const duration = Number(endMs) - Number(startMs);
   const beats = Number(bars) * Number(beatsPerBar);
-  if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(beats) || beats <= 0) return 0;
+  if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(beats) || beats <= 0)
+    return 0;
   return Math.round((beats * 60000) / duration);
 }
 
-export function generateBeatCues({ startMs = 0, bpm = 120, beats = 4, upbeatMs = 0, namePrefix = 'beat' } = {}) {
+export function generateBeatCues({
+  startMs = 0,
+  bpm = 120,
+  beats = 4,
+  upbeatMs = 0,
+  namePrefix = 'beat',
+} = {}) {
   const stepMs = 60000 / Number(bpm || 120);
   return Array.from({ length: Math.max(0, Number(beats) || 0) }, (_, index) =>
     createCue({
@@ -96,7 +114,8 @@ export function generateBeatCues({ startMs = 0, bpm = 120, beats = 4, upbeatMs =
 
 function normalizeDir(input = {}, parentPath = '', overrides = {}) {
   const name = String(input.name || 'root');
-  const currentPath = name === 'root' && parentPath === '' ? '' : `${parentPath}/${name}`.replace(/\/+/g, '/');
+  const currentPath =
+    name === 'root' && parentPath === '' ? '' : `${parentPath}/${name}`.replace(/\/+/g, '/');
   const dir = {
     name,
     dirs: [],
@@ -104,7 +123,8 @@ function normalizeDir(input = {}, parentPath = '', overrides = {}) {
   };
   for (const sample of input.samples || []) {
     const normalized = normalizeSampleMetadata({ ...sample, ...overrides });
-    normalized.path = `${currentPath}/${normalized.filename}`.replace(/\/+/g, '/') || `/${normalized.filename}`;
+    normalized.path =
+      `${currentPath}/${normalized.filename}`.replace(/\/+/g, '/') || `/${normalized.filename}`;
     dir.samples.push(normalized);
   }
   for (const child of input.dirs || input.children || []) {
@@ -136,7 +156,10 @@ function ensureDir(root, path = '/') {
 }
 
 export class SampleLibrary {
-  constructor({ storageKey = 'v11-peer-daw:sample-library', storage = globalThis.localStorage } = {}) {
+  constructor({
+    storageKey = 'v11-peer-daw:sample-library',
+    storage = globalThis.localStorage,
+  } = {}) {
     this.storageKey = storageKey;
     this.storage = storage;
     this.root = { name: 'root', dirs: [], samples: [] };
@@ -174,18 +197,26 @@ export class SampleLibrary {
     const dir = ensureDir(this.root, path);
     const normalized = normalizeSampleMetadata(sample);
     normalized.source = normalized.source || 'local';
-    normalized.path = `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') || `/${normalized.filename}`;
+    normalized.path =
+      `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') ||
+      `/${normalized.filename}`;
     const existingIndex = dir.samples.findIndex(
-      (entry) => entry.id === normalized.id || entry.filename === normalized.filename || entry.sampleRef === normalized.sampleRef
+      (entry) =>
+        entry.id === normalized.id ||
+        entry.filename === normalized.filename ||
+        entry.sampleRef === normalized.sampleRef
     );
-    if (existingIndex >= 0) dir.samples[existingIndex] = { ...dir.samples[existingIndex], ...normalized };
+    if (existingIndex >= 0)
+      dir.samples[existingIndex] = { ...dir.samples[existingIndex], ...normalized };
     else dir.samples.push(normalized);
     return normalized;
   }
 
   mergePeerLibrary(peerId, snapshot = {}) {
     const peer = normalizeDir(snapshot.root || snapshot, '', { source: 'peer', peerId });
-    visitSamples(peer, (sample) => this.addSample(sample.path?.replace(/\/[^/]+$/, '') || '/', sample));
+    visitSamples(peer, (sample) =>
+      this.addSample(sample.path?.replace(/\/[^/]+$/, '') || '/', sample)
+    );
     return this;
   }
 
@@ -199,14 +230,20 @@ export class SampleLibrary {
     const needle = String(identifier || '');
     return (
       this.listSamples().find(
-        (sample) => sample.id === needle || sample.filename === needle || sample.sampleRef === needle || sample.path === needle
+        (sample) =>
+          sample.id === needle ||
+          sample.filename === needle ||
+          sample.sampleRef === needle ||
+          sample.path === needle
       ) || null
     );
   }
 }
 
 function hasProjectAsset(project, sampleRef) {
-  return Array.from(project?.assets || []).some((asset) => asset.id === sampleRef || asset.sampleRef === sampleRef);
+  return Array.from(project?.assets || []).some(
+    (asset) => asset.id === sampleRef || asset.sampleRef === sampleRef
+  );
 }
 
 function availabilityFor(project, library, sampleRef, filename) {
@@ -215,7 +252,7 @@ function availabilityFor(project, library, sampleRef, filename) {
   return 'missing';
 }
 
-function moduleSampleSlots(project = {}, module = {}) {
+function moduleSampleSlots(module = {}) {
   const slots = [];
   if (module.sampleRef) {
     slots.push({
@@ -262,11 +299,12 @@ function moduleSampleSlots(project = {}, module = {}) {
 
 export function detectProjectSampleUsage(project = {}, library = new SampleLibrary()) {
   return Array.from(project.modules || []).flatMap((module) =>
-    moduleSampleSlots(project, module).map((slot) => ({
+    moduleSampleSlots(module).map((slot) => ({
       ...slot,
       availability: availabilityFor(project, library, slot.sampleRef, slot.filename),
       fillState: availabilityFor(project, library, slot.sampleRef, slot.filename),
-      progress: availabilityFor(project, library, slot.sampleRef, slot.filename) === 'missing' ? 0 : 1,
+      progress:
+        availabilityFor(project, library, slot.sampleRef, slot.filename) === 'missing' ? 0 : 1,
     }))
   );
 }
@@ -282,7 +320,11 @@ function createEmitter() {
   return {
     on(type, handler) {
       listeners.set(type, [...(listeners.get(type) || []), handler]);
-      return () => listeners.set(type, (listeners.get(type) || []).filter((fn) => fn !== handler));
+      return () =>
+        listeners.set(
+          type,
+          (listeners.get(type) || []).filter((fn) => fn !== handler)
+        );
     },
     emit(type, payload) {
       for (const handler of listeners.get(type) || []) handler(payload);
@@ -320,6 +362,60 @@ export class SampleSyncManager {
     return payload;
   }
 
+  receivePacket(packet = {}) {
+    const payload = packet.payload || {};
+    if (packet.type === SAMPLE_PACKET_TYPES.request) {
+      this.emitter.emit('request', {
+        peerId: packet.peerId,
+        slotId: payload.slotId,
+        sampleRef: payload.sampleRef,
+        filename: payload.filename,
+      });
+      return true;
+    }
+    if (packet.type === SAMPLE_PACKET_TYPES.start) {
+      this.receiveSampleStart(payload);
+      return true;
+    }
+    if (packet.type === SAMPLE_PACKET_TYPES.chunk) {
+      this.receiveSampleChunk(payload);
+      return true;
+    }
+    if (packet.type === SAMPLE_PACKET_TYPES.complete) {
+      this.receiveSampleComplete(payload);
+      return true;
+    }
+    return false;
+  }
+
+  answerRequest({ peerId, slotId, sampleRef, filename } = {}) {
+    const sample = this.library.findSample(sampleRef) || this.library.findSample(filename);
+    const bytes = sample?.bytes instanceof Uint8Array ? sample.bytes : null;
+    if (!sample || !bytes) return false;
+    const { bytes: _bytes, dataBase64: _dataBase64, ...metadata } = sample;
+    this.send({
+      type: SAMPLE_PACKET_TYPES.start,
+      peerId,
+      payload: {
+        slotId,
+        sampleRef,
+        filename: sample.filename || filename,
+        totalBytes: bytes.length,
+        metadata,
+      },
+    });
+    for (let offset = 0; offset < bytes.length; offset += this.chunkSize) {
+      const chunk = bytes.slice(offset, Math.min(bytes.length, offset + this.chunkSize));
+      const isLast = offset + this.chunkSize >= bytes.length;
+      this.send({
+        type: isLast ? SAMPLE_PACKET_TYPES.complete : SAMPLE_PACKET_TYPES.chunk,
+        peerId,
+        payload: { slotId, bytes: chunk },
+      });
+    }
+    return true;
+  }
+
   receiveSampleStart({ slotId, sampleRef, filename, totalBytes = 0, metadata = {} } = {}) {
     const transfer = {
       slotId,
@@ -340,7 +436,10 @@ export class SampleSyncManager {
     const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
     transfer.chunks.push(chunk);
     transfer.receivedBytes += chunk.length;
-    this.emitProgress(transfer, transfer.totalBytes ? transfer.receivedBytes / transfer.totalBytes : 0);
+    this.emitProgress(
+      transfer,
+      transfer.totalBytes ? transfer.receivedBytes / transfer.totalBytes : 0
+    );
   }
 
   receiveSampleComplete({ slotId, bytes } = {}) {

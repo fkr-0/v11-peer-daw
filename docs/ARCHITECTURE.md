@@ -32,7 +32,7 @@ V11 Peer DAW is a modular, peer-to-peer audio workstation built on WebAudio and 
 ├─────────────────────────────────────────────────────────────┤
 │                      Platform Layer                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │  WebAudio    │  │   WebRTC     │  │ IndexedDB    │    │
+│  │  WebAudio    │  │   WebRTC     │  │ localStorage │    │
 │  └──────────────┘  └──────────────┘  └──────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -236,9 +236,11 @@ function sendCellEdit(x, y, char) {
 
 ### Persistence Layers
 
-1. **LocalStorage**: Module configurations, presets
-2. **IndexedDB**: Audio samples, recordings
-3. **Session Snapshots**: Complete rig state (JSON)
+1. **localStorage-compatible storage**: sample-library snapshots and UI preferences
+2. **Project packages**: complete rig state as JSON, inline-sample JSON, or stored ZIP archive
+3. **Session snapshots**: peer/shared rig state exchanged through the collaboration layer
+
+IndexedDB is not currently implemented in this repository. Treat IndexedDB-backed audio storage as a future persistence option until a concrete adapter and tests exist.
 
 ### Snapshot Schema
 
