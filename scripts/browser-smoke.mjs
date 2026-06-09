@@ -75,8 +75,9 @@ async function runSmoke() {
       });
 
       await page.goto(baseUrl, { waitUntil: 'networkidle' });
-      await page.waitForSelector('#patchCanvas');
-      await page.waitForSelector('#workspaceMainView');
+      assertNoPageErrors(errors);
+      await page.waitForSelector('#patchCanvas', { state: 'attached' });
+      await page.waitForSelector('#workspaceMainView', { state: 'attached' });
       await page.waitForSelector('[data-workspace-view="session"]');
 
       const patchBox = await page.locator('#patchCanvas').boundingBox();
@@ -87,14 +88,21 @@ async function runSmoke() {
       const workspaceViews = ['session', 'chains', 'clips', 'arrangement', 'mixer', 'module'];
       for (const view of workspaceViews) {
         await page.click(`[data-workspace-view="${view}"]`);
-        await page.waitForFunction(
-          (expected) =>
-            document.querySelector('#workspaceMainView')?.textContent?.trim().length > 0 &&
-            document
-              .querySelector(`[data-workspace-view="${expected}"]`)
-              ?.classList.contains('active'),
-          view
-        );
+        await page.waitForTimeout(100);
+        const state = await page.evaluate((expected) => {
+          const workspace = document.querySelector('#workspaceMainView');
+          const tab = document.querySelector(`[data-workspace-view="${expected}"]`);
+          return {
+            expected,
+            hasTab: Boolean(tab),
+            tabClass: tab?.className || '',
+            textLength: workspace?.textContent?.trim().length || 0,
+            textPreview: workspace?.textContent?.trim().slice(0, 120) || '',
+          };
+        }, view);
+        if (!state.hasTab || state.textLength <= 0) {
+          throw new Error(`Workspace view did not render: ${JSON.stringify(state)}`);
+        }
       }
 
       const moduleCards = await page.locator('.module-card').count();

@@ -6,6 +6,20 @@ import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
 import { Arrangement, Clip, ClipSlot } from './core/clips-arrangement.js';
 import { PortType } from './core/contracts.js';
+import {
+  midiToNoteName as formatMidiNoteName,
+  gridCellKey as makeGridCellKey,
+  gridDataFromKey as parseGridDataFromKey,
+  noteNameToMidi as parseNoteNameToMidi,
+  selectedGridData as selectionToGridData,
+} from './core/grid-state.js';
+import {
+  clipCapableModules as selectClipCapableModules,
+  isPatternModule as selectIsPatternModule,
+  isSamplerModule as selectIsSamplerModule,
+  mixerModules as selectMixerModules,
+  workspaceModules as selectWorkspaceModules,
+} from './core/module-selectors.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
 import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
@@ -512,12 +526,7 @@ class V11PeerDAW {
   }
 
   gridCellKey(data = {}) {
-    return [
-      data.gridKind,
-      data.moduleId,
-      data.rowId || data.note || data.rowIndex || '',
-      data.stepIndex ?? data.step ?? data.colIndex ?? '',
-    ].join(':');
+    return makeGridCellKey(data);
   }
 
   gridCellSelected(data = {}) {
@@ -611,37 +620,19 @@ class V11PeerDAW {
   }
 
   noteNameToMidi(note = 'C4') {
-    const match = String(note)
-      .trim()
-      .match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
-    if (!match) return 60;
-    const base = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[match[1].toUpperCase()] ?? 0;
-    const accidental = match[2] === '#' ? 1 : match[2] === 'b' ? -1 : 0;
-    return (Number(match[3]) + 1) * 12 + base + accidental;
+    return parseNoteNameToMidi(note);
   }
 
   midiToNoteName(midi = 60) {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const value = Math.max(0, Math.min(127, Math.round(Number(midi) || 60)));
-    return `${names[value % 12]}${Math.floor(value / 12) - 1}`;
+    return formatMidiNoteName(midi);
   }
 
   gridDataFromKey(key) {
-    const [gridKind, moduleId, rowOrNote, step] = key.split(':');
-    return {
-      gridKind,
-      moduleId,
-      rowId: rowOrNote,
-      note: rowOrNote,
-      rowIndex: rowOrNote,
-      stepIndex: step,
-      step,
-      colIndex: step,
-    };
+    return parseGridDataFromKey(key);
   }
 
   selectedGridData() {
-    return [...this.gridSelection].map((key) => this.gridDataFromKey(key));
+    return selectionToGridData(this.gridSelection);
   }
 
   findPianoNote(module, data) {
@@ -898,16 +889,11 @@ class V11PeerDAW {
   }
 
   workspaceModules() {
-    return [...this.patchBay.modules.values()];
+    return selectWorkspaceModules(this.patchBay.modules);
   }
 
   clipCapableModules() {
-    return this.workspaceModules().filter(
-      (module) =>
-        module.inputs?.some((p) => p.type === PortType.CLOCK || p.type === PortType.MIDI) ||
-        module.outputs?.some((p) => p.type === PortType.MIDI || p.type === PortType.CONTROL) ||
-        ['sequencer', 'ocra', 'pianoroll'].includes(module.kind)
-    );
+    return selectClipCapableModules(this.workspaceModules());
   }
 
   makeClipSlot({ id, moduleId, title, note = 'C4', launchBeat = 0, stopBeat = null } = {}) {
@@ -1322,24 +1308,11 @@ class V11PeerDAW {
   }
 
   mixerModules() {
-    return this.workspaceModules().filter(
-      (module) =>
-        module.outputs?.some((p) => p.type === PortType.AUDIO) ||
-        module.inputs?.some((p) => p.type === PortType.AUDIO) ||
-        module === this.mixer
-    );
+    return selectMixerModules(this.workspaceModules(), { mixer: this.mixer });
   }
 
   isSamplerModule(module) {
-    return Boolean(
-      module &&
-        (module.kind === 'audio-source' ||
-          module.fileName ||
-          module.sampleMetadata ||
-          module.pads ||
-          module.zones) &&
-        (module.setSampleMetadata || module.assignPad || module.sliceCount !== undefined)
-    );
+    return selectIsSamplerModule(module);
   }
 
   ensureWaveformEdit(module) {
@@ -1396,12 +1369,7 @@ class V11PeerDAW {
   }
 
   isPatternModule(module) {
-    return Boolean(
-      module &&
-        (Array.isArray(module.rows) ||
-          Array.isArray(module.grid) ||
-          typeof module.arpPattern === 'function')
-    );
+    return selectIsPatternModule(module);
   }
 
   renderSequencerPatternEditor(module) {

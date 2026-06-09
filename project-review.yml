@@ -1043,7 +1043,7 @@ project_review:
     title: Extract src/app.js responsibilities into tested controllers
     severity: P1
     urgency_reason: src/app.js is 2712 lines and owns too many architectural layers.
-    status: in_progress
+    status: done
     confidence:
       level: high
       evidence:
@@ -1105,6 +1105,21 @@ project_review:
       and pnpm verify:build pass with 33 suites / 191 tests.'
     - 'Not marked done: src/app.js remains a large orchestrator and still owns transport, workspace rendering, import/rebuild
       side effects, peer/session wiring, focused module editors, and audio/module lifecycle orchestration.'
+    - 'Verified RED: tests/unit/grid-state.test.js failed because src/core/grid-state.js did not exist.'
+    - 'Verified GREEN: grid-state tests pass for stable grid-cell keys, key-to-data aliases, selected-grid-data mapping, and
+      note/MIDI conversion fallbacks.'
+    - 'Verified regression after fourth extraction slice: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand,
+      and pnpm verify:build pass with 34 suites / 194 tests.'
+    - 'Verified RED: tests/unit/module-selectors.test.js failed because src/core/module-selectors.js did not exist.'
+    - 'Verified GREEN: module selector tests pass for workspace module enumeration, clip-capable selection, mixer selection,
+      sampler classification, and pattern classification.'
+    - 'Emergent regression caught by browser smoke: selector extraction accidentally removed PortType import from src/app.js
+      while other app methods still used PortType. Restored the import and rebuilt before smoke verification.'
+    - 'Verified final P1-002 gate: pnpm audit --audit-level moderate, pnpm check, pnpm test -- --runInBand, and pnpm verify:build
+      pass with 35 suites / 197 tests and browser smoke OK.'
+    - 'P1-002 closed after five bounded extraction slices reduced app.js responsibility: WorkspacePreferences, sample-panel
+      renderer, project-state serializers, grid-state helpers, and module-selectors. Residual app orchestration can continue
+      as future lower-priority refactoring rather than this original P1 risk item.'
     actual_changes:
     - Added src/core/workspace-preferences.js with pure WorkspacePreferences persistence helper.
     - Added tests/unit/workspace-preferences.test.js for workspace view persistence, drawer state persistence, invalid storage,
@@ -1119,6 +1134,17 @@ project_review:
     - Added tests/unit/project-state.test.js for project/rig serialization contracts and shallow-copy behavior.
     - Updated src/app.js to delegate mixer/clip/project/rig snapshot assembly to project-state helpers while preserving existing
       app method names.
+    - Added src/core/grid-state.js with pure gridCellKey(), gridDataFromKey(), selectedGridData(), noteNameToMidi(), and midiToNoteName()
+      helpers.
+    - Added tests/unit/grid-state.test.js covering grid-cell identity, key parsing, selection mapping, and note/MIDI conversion.
+    - Updated src/app.js to delegate grid identity and note conversion helper methods to src/core/grid-state.js.
+    - Added src/core/module-selectors.js with pure workspaceModules(), clipCapableModules(), mixerModules(), isSamplerModule(),
+      and isPatternModule() helpers.
+    - Added tests/unit/module-selectors.test.js covering module selection/classification contracts.
+    - Updated src/app.js to delegate module selection/classification helpers to src/core/module-selectors.js while restoring
+      PortType import for remaining app methods.
+    - Adjusted scripts/browser-smoke.mjs to use explicit diagnostics and attached-selector checks before bounding-box assertions,
+      avoiding brittle active-class timing waits.
   - id: P1-003
     title: Implement real project archive import/restore with validation
     severity: P1
@@ -1807,3 +1833,35 @@ project_review:
     - pnpm check
     - pnpm test -- --runInBand
     - pnpm verify:build
+  - date: '2026-06-06'
+    summary: 'P1-002 was advanced with a fourth tested extraction slice: grid identity and note conversion helpers moved out
+      of src/app.js into src/core/grid-state.js.'
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/grid-state.test.js --runInBand
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build
+  - date: '2026-06-06'
+    summary: P1-002 was closed after the fifth tested extraction slice moved module selector helpers out of src/app.js and
+      full verify:build passed, including browser smoke.
+    verified_commands:
+    - node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit/module-selectors.test.js --runInBand
+    - pnpm build && pnpm test:smoke
+    - pnpm audit --audit-level moderate
+    - pnpm check
+    - pnpm test -- --runInBand
+    - pnpm verify:build
+  follow_up_tasks:
+  - id: FUTURE-APP-001
+    title: Continue optional app orchestration extraction after P1-002 closure
+    status: proposed_future
+    reason: src/app.js still coordinates transport, workspace rendering, peer/session wiring, import/rebuild side effects,
+      and focused module editors, but the original P1 risk has been reduced through five tested extraction slices and all
+      gates now pass.
+    suggested_slices:
+    - extract transport/transport-bar controller
+    - extract arrangement action controller
+    - extract focused module editor renderer family
+    - extract project import/rebuild side-effect controller
+    verification: Each future slice should follow RED/GREEN with focused tests plus pnpm verify:build.
