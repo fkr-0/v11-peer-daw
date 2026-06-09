@@ -174,6 +174,19 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(html).toContain('id="sampleLibraryJson"');
   });
 
+  test('workspace exposes a first-class sample library matrix view', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    expect(html).toContain('data-workspace-view="samples"');
+    expect(html).toContain('>Samples<');
+    expect(app).toContain('renderSampleLibraryView');
+    expect(app).toContain('detectProjectSampleSlots');
+    expect(app).toContain('renderSampleLibraryMatrixHtml');
+    expect(app).toContain('selectedSampleId');
+    expect(app).toContain('assignSelectedSampleToSlot');
+  });
+
   test('arrangement design surface exposes automation, clips, arrangement, and composed preset controls', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 

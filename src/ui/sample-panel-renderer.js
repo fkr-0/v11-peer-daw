@@ -29,3 +29,26 @@ export function renderProjectSampleUsageHtml(usage = []) {
     })
     .join('');
 }
+
+export function renderSampleLibraryMatrixHtml({ samples = [], slots = [], selectedSampleId = '' } = {}) {
+  const sampleRows = samples.length
+    ? samples
+        .map((sample) => {
+          const selected = String(sample.id) === String(selectedSampleId);
+          return `<button type="button" class="sample-matrix-file ${selected ? 'selected-sample' : ''}" data-sample-action="select-library-sample" data-sample-id="${escapeHtml(sample.id)}"><strong>${escapeHtml(sample.filename)}</strong><small>${escapeHtml(sample.sampleLengthMs || 0)}ms · ${escapeHtml(sample.source || 'local')}</small>${selected ? '<span class="pill">Selected sample</span>' : ''}</button>`;
+        })
+        .join('')
+    : '<p class="microcopy">No files in the global sample library yet. Upload or import a library to start assigning samples.</p>';
+
+  const slotRows = slots.length
+    ? slots
+        .map((slot) => {
+          const status = slot.availability || slot.fillState || 'empty';
+          const filename = slot.filename || 'open slot';
+          return `<article class="sample-matrix-slot state-${escapeHtml(status)}" data-sample-slot="${escapeHtml(slot.id)}" data-sample-ref="${escapeHtml(slot.sampleRef || slot.id)}" data-module-id="${escapeHtml(slot.moduleId || '')}" data-slot-id="${escapeHtml(slot.slotId || '')}"><div><strong>${escapeHtml(slot.moduleTitle || slot.moduleId || 'Module')}</strong><small>${escapeHtml(slot.slotLabel || slot.slotId || slot.sampleRef || slot.id)} · ${escapeHtml(filename)}</small></div><span class="pill">${escapeHtml(status)}</span><div class="button-row"><button type="button" data-sample-action="assign-selected" data-sample-slot="${escapeHtml(slot.id)}">ASSIGN SELECTED</button><button type="button" data-sample-action="pick-upload" data-sample-slot="${escapeHtml(slot.id)}">UPLOAD / REPLACE</button><button type="button" data-sample-action="query-peer" data-sample-slot="${escapeHtml(slot.id)}">QUERY PEERS</button><button type="button" data-sample-action="open-editor" data-module-id="${escapeHtml(slot.moduleId || '')}">OPEN MODULE</button></div></article>`;
+        })
+        .join('')
+    : '<p class="microcopy">No sample-capable slots in this project yet. Add a sampler, drum sampler, or multisampler.</p>';
+
+  return `<section class="sample-library-matrix"><article class="sample-matrix-column"><header><strong>Library files</strong><span class="pill">${samples.length}</span></header><div class="sample-matrix-files">${sampleRows}</div></article><article class="sample-matrix-column"><header><strong>Project sample slots</strong><span class="pill">${slots.length}</span></header><div class="sample-matrix-slots">${slotRows}</div></article></section>`;
+}

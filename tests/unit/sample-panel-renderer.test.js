@@ -1,6 +1,7 @@
 import { describe, expect, test } from '@jest/globals';
 import {
   renderProjectSampleUsageHtml,
+  renderSampleLibraryMatrixHtml,
   renderSampleLibraryTreeHtml,
 } from '../../src/ui/sample-panel-renderer.js';
 
@@ -60,5 +61,45 @@ describe('sample panel renderer', () => {
 
   test('renders empty sample usage state', () => {
     expect(renderProjectSampleUsageHtml([])).toContain('No project sample references yet.');
+  });
+
+  test('renders sample library matrix with files, all slots, and mix-match actions', () => {
+    const html = renderSampleLibraryMatrixHtml({
+      samples: [
+        { id: 'kick-1', filename: '<kick>.wav', sampleLengthMs: 500, source: 'local' },
+        { id: 'snare-1', filename: 'snare.wav', sampleLengthMs: 700, source: 'peer' },
+      ],
+      slots: [
+        {
+          id: 'drums-1/kick',
+          sampleRef: 'drums-1/kick',
+          moduleId: 'drums-1',
+          moduleTitle: 'Drums',
+          slotLabel: 'Kick',
+          filename: 'kick.wav',
+          availability: 'available',
+        },
+        {
+          id: 'drums-1/snare',
+          sampleRef: 'drums-1/snare',
+          moduleId: 'drums-1',
+          moduleTitle: 'Drums',
+          slotLabel: 'Snare',
+          availability: 'empty',
+        },
+      ],
+      selectedSampleId: 'kick-1',
+    });
+
+    expect(html).toContain('sample-library-matrix');
+    expect(html).toContain('data-sample-id="kick-1"');
+    expect(html).toContain('&lt;kick&gt;.wav');
+    expect(html).not.toContain('<kick>');
+    expect(html).toContain('data-sample-slot="drums-1/snare"');
+    expect(html).toContain('state-empty');
+    expect(html).toContain('data-sample-action="assign-selected"');
+    expect(html).toContain('data-sample-action="open-editor"');
+    expect(html).toContain('data-sample-action="query-peer"');
+    expect(html).toContain('Selected sample');
   });
 });

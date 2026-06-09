@@ -252,46 +252,94 @@ function availabilityFor(project, library, sampleRef, filename) {
   return 'missing';
 }
 
-function moduleSampleSlots(module = {}) {
+function looksLikeAudioFilename(value) {
+  return /\.(wav|aif|aiff|flac|mp3|ogg|m4a)$/i.test(String(value || ''));
+}
+
+function sampleFilename(...values) {
+  return values.find((value) => looksLikeAudioFilename(value)) || null;
+}
+
+function moduleTypeOf(module = {}) {
+  const raw = String(module.moduleType || module.type || '').toLowerCase();
+  if (raw) return raw;
+  const hint = `${module.id || ''} ${module.title || ''} ${module.kind || ''}`.toLowerCase();
+  if (hint.includes('drum') && hint.includes('sampler')) return 'drumsampler';
+  if (hint.includes('multi') && hint.includes('sampler')) return 'multisampler';
+  if (hint.includes('sampler')) return 'sampler';
+  return String(module.kind || '').toLowerCase();
+}
+
+function slotAvailability(project, library, slot) {
+  if (!slot.filename && !slot.assigned) return 'empty';
+  return availabilityFor(project, library, slot.sampleRef, slot.filename);
+}
+
+function moduleSampleSlots(module = {}, { includeOpen = false } = {}) {
   const slots = [];
-  if (module.sampleRef) {
+  const moduleType = moduleTypeOf(module);
+  const moduleTitle = module.title || module.id;
+  const base = {
+    moduleId: module.id,
+    moduleTitle,
+    moduleType: module.moduleType || module.kind,
+  };
+
+  if (module.sampleRef || includeOpen && moduleType === 'sampler') {
+    const sampleRef = module.sampleRef || `${module.id}/sample`;
+    const filename = sampleFilename(module.fileName, module.label, module.sampleMetadata?.filename);
+    const assigned = Boolean(module.sampleRef || filename);
     slots.push({
-      id: module.sampleRef,
-      sampleRef: module.sampleRef,
-      moduleId: module.id,
-      moduleTitle: module.title || module.id,
-      moduleType: module.moduleType || module.kind,
-      filename: module.fileName || module.label || 'sample.wav',
-      sampleLengthMs: module.sampleLengthMs,
-      type: module.type || module.mime,
+      ...base,
+      id: sampleRef,
+      sampleRef,
+      slotId: 'sample',
+      slotLabel: 'Main sample',
+      filename: filename || undefined,
+      sampleLengthMs: module.sampleLengthMs || module.sampleMetadata?.sampleLengthMs,
+      type: module.type || module.mime || module.sampleMetadata?.type,
+      assigned,
     });
   }
+
   for (const pad of module.pads || []) {
-    if (!pad.sampleRef) continue;
+    if (!includeOpen && !pad.sampleRef) continue;
+    const sampleRef = pad.sampleRef || `${module.id}/${pad.id || 'pad'}`;
+    const filename = sampleFilename(pad.fileName, pad.filename, pad.name);
+    const assigned = Boolean(pad.sampleRef || filename);
     slots.push({
-      id: pad.sampleRef,
-      sampleRef: pad.sampleRef,
-      moduleId: module.id,
-      moduleTitle: module.title || module.id,
-      moduleType: module.moduleType || module.kind,
+      ...base,
+      id: sampleRef,
+      sampleRef,
       slotId: pad.id,
-      filename: pad.name || `${pad.id}.wav`,
+      slotLabel: pad.name || pad.id || 'Pad',
+      filename: filename || undefined,
       sampleLengthMs: pad.sampleLengthMs,
       type: pad.type || pad.mime,
+      assigned,
     });
   }
-  for (const zone of module.zones || []) {
-    if (!zone.sampleRef) continue;
+
+  const zones = module.zones || [];
+  const openZones = includeOpen && moduleType === 'multisampler' && zones.length === 0
+    ? [{ rootNote: 'C4', name: 'Empty zone' }]
+    : zones;
+  for (const [zoneIndex, zone] of openZones.entries()) {
+    if (!includeOpen && !zone.sampleRef) continue;
+    const slotId = zone.rootNote || `zone-${zoneIndex + 1}`;
+    const sampleRef = zone.sampleRef || `${module.id}/${slotId}`;
+    const filename = sampleFilename(zone.fileName, zone.filename, zone.name);
+    const assigned = Boolean(zone.sampleRef || filename);
     slots.push({
-      id: zone.sampleRef,
-      sampleRef: zone.sampleRef,
-      moduleId: module.id,
-      moduleTitle: module.title || module.id,
-      moduleType: module.moduleType || module.kind,
-      slotId: zone.rootNote,
-      filename: zone.name || `${zone.rootNote || 'zone'}.wav`,
+      ...base,
+      id: sampleRef,
+      sampleRef,
+      slotId,
+      slotLabel: `Zone ${slotId}`,
+      filename: filename || undefined,
       sampleLengthMs: zone.sampleLengthMs,
       type: zone.type || zone.mime,
+      assigned,
     });
   }
   return slots;
@@ -299,13 +347,29 @@ function moduleSampleSlots(module = {}) {
 
 export function detectProjectSampleUsage(project = {}, library = new SampleLibrary()) {
   return Array.from(project.modules || []).flatMap((module) =>
-    moduleSampleSlots(module).map((slot) => ({
-      ...slot,
-      availability: availabilityFor(project, library, slot.sampleRef, slot.filename),
-      fillState: availabilityFor(project, library, slot.sampleRef, slot.filename),
-      progress:
-        availabilityFor(project, library, slot.sampleRef, slot.filename) === 'missing' ? 0 : 1,
-    }))
+    moduleSampleSlots(module).map((slot) => {
+      const availability = availabilityFor(project, library, slot.sampleRef, slot.filename);
+      return {
+        ...slot,
+        availability,
+        fillState: availability,
+        progress: availability === 'missing' ? 0 : 1,
+      };
+    })
+  );
+}
+
+export function detectProjectSampleSlots(project = {}, library = new SampleLibrary()) {
+  return Array.from(project.modules || []).flatMap((module) =>
+    moduleSampleSlots(module, { includeOpen: true }).map((slot) => {
+      const availability = slotAvailability(project, library, slot);
+      return {
+        ...slot,
+        availability,
+        fillState: availability,
+        progress: availability === 'empty' || availability === 'missing' ? 0 : 1,
+      };
+    })
   );
 }
 

@@ -9,6 +9,7 @@ import {
   deriveBpmFromInterval,
   detectMissingSampleSlots,
   detectProjectSampleUsage,
+  detectProjectSampleSlots,
   generateBeatCues,
   normalizeSampleMetadata,
   tapTempoBpm,
@@ -184,6 +185,54 @@ describe('project sample usage and missing sample slots', () => {
         availability: 'embedded',
       }),
     ]);
+  });
+
+  test('lists every assignable project sample slot including empty drum pads and multisampler zones', () => {
+    const project = {
+      modules: [
+        {
+          id: 'sampler-1',
+          moduleType: 'sampler',
+          title: 'Lead Sampler',
+          fileName: 'lead.wav',
+          sampleRef: 'sampler-1/sample',
+        },
+        {
+          id: 'drums-1',
+          moduleType: 'drumsampler',
+          title: 'Drums',
+          pads: [
+            { id: 'kick', name: 'kick.wav', sampleRef: 'drums-1/kick' },
+            { id: 'snare', name: 'Snare' },
+          ],
+        },
+        {
+          id: 'multi-1',
+          moduleType: 'multisampler',
+          title: 'Multi',
+          zones: [{ name: 'zone-a.wav', rootNote: 'C4', sampleRef: 'multi-1/zone-a' }],
+        },
+      ],
+      assets: [{ id: 'drums-1/kick', label: 'kick.wav' }],
+    };
+    const library = new SampleLibrary();
+    library.addSample('/samples', {
+      filename: 'lead.wav',
+      sampleLengthMs: 800,
+      sampleRef: 'sampler-1/sample',
+    });
+
+    const slots = detectProjectSampleSlots(project, library);
+
+    expect(slots.map((slot) => [slot.id, slot.slotLabel, slot.availability])).toEqual([
+      ['sampler-1/sample', 'Main sample', 'available'],
+      ['drums-1/kick', 'kick.wav', 'embedded'],
+      ['drums-1/snare', 'Snare', 'empty'],
+      ['multi-1/zone-a', 'Zone C4', 'missing'],
+    ]);
+    expect(slots[2]).toEqual(
+      expect.objectContaining({ moduleId: 'drums-1', slotId: 'snare', filename: undefined })
+    );
   });
 
   test('detects one card-worthy slot per unresolved project sample reference', () => {

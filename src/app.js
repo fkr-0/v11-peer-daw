@@ -34,6 +34,7 @@ import {
   SAMPLE_PACKET_TYPES,
   SampleLibrary,
   SampleSyncManager,
+  detectProjectSampleSlots,
   detectProjectSampleUsage,
   normalizeSampleMetadata,
 } from './core/sample-library.js';
@@ -48,6 +49,7 @@ import { exportComposedPresetBankJson } from './modules/composed-soundscape-pres
 import { PatchCanvas } from './ui/patch-canvas.js';
 import {
   renderProjectSampleUsageHtml,
+  renderSampleLibraryMatrixHtml,
   renderSampleLibraryTreeHtml,
 } from './ui/sample-panel-renderer.js';
 
@@ -69,6 +71,7 @@ class V11PeerDAW {
     this.mixer = null;
     this.focusedModuleId = null;
     this.selectedChainId = null;
+    this.selectedSampleId = null;
     this.currentBeat = 0;
     this.mixerState = { masterVolume: 0.8, channels: {} };
     this.clipSlotSequence = 1;
@@ -497,6 +500,11 @@ class V11PeerDAW {
           arrangementAction.dataset.arrangementAction,
           arrangementAction
         );
+        return;
+      }
+      const sampleAction = event.target.closest('[data-sample-action]');
+      if (sampleAction) {
+        this.handleSampleAction(sampleAction);
         return;
       }
       const moduleAction = event.target.closest('[data-module-action]');
@@ -2428,6 +2436,18 @@ class V11PeerDAW {
     return `<div class="chain-list">${chainCards || '<p class="microcopy">No modules yet. Add modules and patch them to see signal chains.</p>'}${orphanChips}</div>`;
   }
 
+  renderSampleLibraryView() {
+    const project = this.serializeRig();
+    const samples = this.sampleLibrary.listSamples();
+    const slots = detectProjectSampleSlots(project, this.sampleLibrary).map((slot) => {
+      const progress = this.sampleSyncProgress.get(slot.id)?.progress;
+      return progress !== undefined
+        ? { ...slot, availability: progress >= 1 ? 'available' : 'syncing', progress }
+        : slot;
+    });
+    return `<div class="sample-library-workspace"><div class="workspace-toolbar"><strong>Sample Library</strong><span class="microcopy">${samples.length} files · ${slots.length} project slots · select a file, then assign it to any open or loaded slot.</span><button type="button" data-sample-action="pick-upload">UPLOAD FILES</button></div>${renderSampleLibraryMatrixHtml({ samples, slots, selectedSampleId: this.selectedSampleId })}</div>`;
+  }
+
   renderWorkspaceView() {
     const root = document.querySelector('#workspaceMainView');
     if (!root) return;
@@ -2451,6 +2471,10 @@ class V11PeerDAW {
       const assigned = new Set(chains.flat());
       const unpatched = modules.filter((module) => !assigned.has(module.id)).length;
       root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
+      return;
+    }
+    if (view === 'samples') {
+      root.innerHTML = this.renderSampleLibraryView();
       return;
     }
     if (view === 'clips') {
@@ -2602,28 +2626,77 @@ class V11PeerDAW {
     });
     document.querySelector('#missingSampleSlots')?.addEventListener('click', (event) => {
       const button = event.target.closest('[data-sample-action]');
-      if (!button) return;
-      const slot = button.closest('[data-sample-slot]');
-      const slotId = slot?.dataset.sampleSlot || '';
-      const sampleRef = slot?.dataset.sampleRef || slotId;
-      const filename = slot?.dataset.filename || '';
-      if (button.dataset.sampleAction === 'query-peer') {
-        this.sampleSync.requestSample({ slotId, sampleRef, filename, peerId: '' });
-        this.sampleSyncProgress.set(slotId, { slotId, sampleRef, filename, progress: 0.05 });
-        this.renderProjectSampleUsage();
-        this.logText(`sample query requested: ${filename || sampleRef}`);
-      }
-      if (button.dataset.sampleAction === 'pick-upload') {
-        document.querySelector('#sampleLibraryUploadFile')?.click();
-      }
-      if (button.dataset.sampleAction === 'open-editor') {
-        const moduleId = button.dataset.moduleId || slot?.dataset.moduleId || '';
-        if (moduleId && this.patchBay.modules.has(moduleId)) {
-          this.focusedModuleId = moduleId;
-          this.setWorkspaceView('module');
-        }
-      }
+      if (button) this.handleSampleAction(button);
     });
+  }
+
+  handleSampleAction(button) {
+    const slot = button.closest('[data-sample-slot]');
+    const slotId = button.dataset.sampleSlot || slot?.dataset.sampleSlot || '';
+    const sampleRef = slot?.dataset.sampleRef || slotId;
+    const filename = slot?.dataset.filename || '';
+    if (button.dataset.sampleAction === 'select-library-sample') {
+      this.selectedSampleId = button.dataset.sampleId || null;
+      this.renderWorkspaceView();
+      this.logText(`selected sample: ${this.selectedSampleId || 'none'}`);
+      return;
+    }
+    if (button.dataset.sampleAction === 'assign-selected') {
+      this.assignSelectedSampleToSlot(slotId);
+      return;
+    }
+    if (button.dataset.sampleAction === 'query-peer') {
+      this.sampleSync.requestSample({ slotId, sampleRef, filename, peerId: '' });
+      this.sampleSyncProgress.set(slotId, { slotId, sampleRef, filename, progress: 0.05 });
+      this.renderSamplePanels();
+      this.renderWorkspaceView();
+      this.logText(`sample query requested: ${filename || sampleRef}`);
+      return;
+    }
+    if (button.dataset.sampleAction === 'pick-upload') {
+      document.querySelector('#sampleLibraryUploadFile')?.click();
+      return;
+    }
+    if (button.dataset.sampleAction === 'open-editor') {
+      const moduleId = button.dataset.moduleId || slot?.dataset.moduleId || '';
+      if (moduleId && this.patchBay.modules.has(moduleId)) {
+        this.focusedModuleId = moduleId;
+        this.setWorkspaceView('module');
+      }
+    }
+  }
+
+  assignSelectedSampleToSlot(slotId = '') {
+    const sample = this.sampleLibrary.findSample(this.selectedSampleId);
+    const project = this.serializeRig();
+    const slot = detectProjectSampleSlots(project, this.sampleLibrary).find((entry) => entry.id === slotId);
+    if (!sample || !slot) {
+      this.logText('sample assignment skipped: select a sample and slot first');
+      return false;
+    }
+    const module = this.patchBay.modules.get(slot.moduleId);
+    if (!module) return false;
+    const metadata = normalizeSampleMetadata({
+      ...sample,
+      sampleRef: slot.sampleRef || slot.id,
+      filename: sample.filename,
+    });
+    if (slot.slotId === 'sample' && typeof module.setSampleMetadata === 'function') {
+      module.fileName = sample.filename;
+      module.setSampleMetadata(metadata);
+    } else if (typeof module.assignPad === 'function') {
+      module.assignPad(slot.slotId, { fileName: sample.filename });
+    } else if (Array.isArray(module.zones)) {
+      const existing = module.zones.find((zone) => zone.rootNote === slot.slotId || zone.name === slot.filename);
+      if (existing) existing.name = sample.filename;
+      else module.zones.push({ name: sample.filename, rootNote: slot.slotId || 'C4', buffer: null });
+      module.render?.();
+    }
+    this.renderSamplePanels();
+    this.renderWorkspaceView();
+    this.publishProjectChange('sample-assigned');
+    this.logText(`assigned ${sample.filename} to ${slot.moduleTitle} / ${slot.slotLabel || slot.slotId}`);
+    return true;
   }
 
   escapeHtml(value = '') {
@@ -2673,6 +2746,7 @@ class V11PeerDAW {
   renderSamplePanels() {
     this.renderSampleLibraryTree();
     this.renderProjectSampleUsage();
+    if (this.workspaceView == 'samples') this.renderWorkspaceView();
   }
 
   renderSampleLibraryTree() {

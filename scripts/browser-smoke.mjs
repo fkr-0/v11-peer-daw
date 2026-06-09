@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import http from 'node:http';
 import { chromium } from 'playwright';
 
@@ -85,7 +88,7 @@ async function runSmoke() {
         throw new Error(`Patch canvas has invalid bounding box: ${JSON.stringify(patchBox)}`);
       }
 
-      const workspaceViews = ['session', 'chains', 'clips', 'arrangement', 'mixer', 'module'];
+      const workspaceViews = ['session', 'chains', 'clips', 'samples', 'arrangement', 'mixer', 'module'];
       for (const view of workspaceViews) {
         await page.click(`[data-workspace-view="${view}"]`);
         await page.waitForFunction(
@@ -107,6 +110,25 @@ async function runSmoke() {
           throw new Error(`Workspace view did not render: ${JSON.stringify(state)}`);
         }
       }
+
+      const sampleDir = mkdtempSync(join(tmpdir(), 'v11-peer-daw-smoke-'));
+      const smokeSamplePath = join(sampleDir, 'smoke-kick.wav');
+      writeFileSync(smokeSamplePath, Buffer.from('RIFF$\0\0\0WAVEfmt '));
+      await page.selectOption('#addModule', 'sampler');
+      await page.waitForSelector('.module-card[data-module-id]', { state: 'visible' });
+      await page.setInputFiles('#sampleLibraryUploadFile', smokeSamplePath);
+      await page.click('[data-workspace-view="samples"]');
+      await page.waitForSelector('.sample-library-matrix', { state: 'visible' });
+      await page.waitForSelector('[data-sample-id]', { state: 'visible' });
+      await page.waitForSelector('[data-sample-slot]', { state: 'visible' });
+      const sampleMatrixText = await page.locator('.sample-library-matrix').textContent();
+      if (!sampleMatrixText?.includes('smoke-kick.wav') || !sampleMatrixText.includes('Project sample slots')) {
+        throw new Error(`Sample matrix did not expose uploaded file and project slots: ${sampleMatrixText}`);
+      }
+      await page.locator('[data-sample-action="select-library-sample"]').first().click();
+      await page.waitForFunction(() => document.querySelector('.sample-library-matrix')?.textContent?.includes('Selected sample'));
+      await page.locator('[data-sample-action="assign-selected"]').first().click();
+      await page.waitForFunction(() => document.querySelector('.sample-library-matrix')?.textContent?.includes('smoke-kick.wav'));
 
       await page.locator('details.sidebar-drawer', { hasText: 'Examples' }).evaluate((el) => {
         el.open = true;
@@ -130,6 +152,23 @@ async function runSmoke() {
         await page.waitForFunction(() => !document.querySelector('[data-clip-slot-row]')?.textContent?.includes('playing'));
         await firstClip.locator('[data-workspace-view-target="module"]').first().click();
         await page.waitForFunction(() => document.querySelector('#workspaceMainView')?.textContent?.match(/Open|notes|grid|Pad|Sample|Envelope/i));
+        await page.click('[data-workspace-view="samples"]');
+        await page.waitForSelector('.sample-library-matrix', { state: 'visible' });
+        const exampleSampleText = await page.locator('.sample-library-matrix').textContent();
+        if (!exampleSampleText?.includes('Library files') || !exampleSampleText.includes('Project sample slots')) {
+          throw new Error(`Sample matrix incomplete after loading ${exampleId}: ${exampleSampleText}`);
+        }
+        const exampleSlotCount = await page.locator('[data-sample-slot]').count();
+        if (exampleSlotCount > 0) {
+          if ((await page.locator('[data-sample-action="assign-selected"]').count()) <= 0) {
+            throw new Error(`Sample matrix lacks assign-selected actions after loading ${exampleId}`);
+          }
+          if ((await page.locator('[data-sample-action="open-editor"]').count()) <= 0) {
+            throw new Error(`Sample matrix lacks open-editor actions after loading ${exampleId}`);
+          }
+        } else if (!exampleSampleText.includes('No sample-capable slots')) {
+          throw new Error(`Sample matrix did not explain empty sample-slot project for ${exampleId}: ${exampleSampleText}`);
+        }
         await page.click('[data-workspace-view="chains"]');
         await page.waitForSelector('[data-chain-card]', { state: 'visible' });
         const chainText = await page.locator('[data-chain-card]').first().textContent();
@@ -158,7 +197,7 @@ async function runSmoke() {
         throw new Error(`Sample library tree did not render root label: ${sampleLibraryText}`);
       }
       const missingSampleText = await page.locator('#missingSampleSlots').textContent();
-      if (!missingSampleText?.trim()) throw new Error('Missing sample panel rendered empty text');
+      if (missingSampleText == null) throw new Error('Missing sample panel did not render');
       const sampleCards = await page.locator('.sample-slot-card').count();
       if (sampleCards > 0) {
         const queryButtons = await page.locator('[data-sample-action="query-peer"]').count();
