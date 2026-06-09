@@ -1,7 +1,7 @@
 // V11 Peer DAW/src/app.js
 // Main application module
 
-import { PeernetLobby } from '../../peernetjs/peernet-lib.js';
+import { PeernetLobby } from '../vendor/peernet-lib.js';
 import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
 import { Arrangement, Clip, ClipSlot } from './core/clips-arrangement.js';
