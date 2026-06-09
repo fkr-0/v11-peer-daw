@@ -106,6 +106,7 @@ class V11PeerDAW {
     this._transportStep = 0;
     this._transportStartTime = 0;
     this.sampleLibrary = new SampleLibrary();
+    this.pendingSampleUploadSlotId = null;
     this.sampleSyncProgress = new Map();
     this.sampleSync = new SampleSyncManager({
       library: this.sampleLibrary,
@@ -2658,6 +2659,7 @@ class V11PeerDAW {
       return;
     }
     if (button.dataset.sampleAction === 'pick-upload') {
+      this.pendingSampleUploadSlotId = slotId || null;
       document.querySelector('#sampleLibraryUploadFile')?.click();
       return;
     }
@@ -2732,16 +2734,26 @@ class V11PeerDAW {
   }
 
   async importSampleLibraryFiles(files) {
+    const imported = [];
     for (const file of Array.from(files || [])) {
-      this.sampleLibrary.addSample('/uploads', {
-        filename: file.name,
-        sampleLengthMs: 0,
-        type: file.type || 'application/octet-stream',
-        bytes: new Uint8Array(await file.arrayBuffer()),
-      });
+      imported.push(
+        this.sampleLibrary.addSample('/uploads', {
+          filename: file.name,
+          sampleLengthMs: 0,
+          type: file.type || 'application/octet-stream',
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        })
+      );
     }
     this.sampleLibrary.save();
-    this.renderSamplePanels();
+    const targetSlotId = this.pendingSampleUploadSlotId;
+    this.pendingSampleUploadSlotId = null;
+    if (targetSlotId && imported[0]) {
+      this.selectedSampleId = imported[0].id;
+      this.assignSelectedSampleToSlot(targetSlotId);
+    } else {
+      this.renderSamplePanels();
+    }
     this.logText(`global sample library imported ${Array.from(files || []).length} file(s)`);
   }
 

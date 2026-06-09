@@ -16,10 +16,11 @@
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
     "test:coverage": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
-    "verify:build": "pnpm test && pnpm build && pnpm test:smoke",
+    "verify:build": "pnpm test && pnpm build && pnpm test:smoke && pnpm test:e2e:samples",
     "verify:deploy": "pnpm verify:build && cd .. && node app-hub-v11/server/artifact-catalog.mjs app-hub-v11/artifacts.source.json app-hub-v11/data && node --test tests/v11-peer-daw-build-imports.test.mjs tests/v11-peer-daw-deploy-assets.test.mjs",
     "clean": "rm -rf dist node_modules",
-    "test:smoke": "node scripts/browser-smoke.mjs"
+    "test:smoke": "node scripts/browser-smoke.mjs",
+    "test:e2e:samples": "node scripts/sample-loading-replacing-e2e.mjs"
   },
   "keywords": [
     "daw",
