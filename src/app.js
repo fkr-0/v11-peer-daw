@@ -499,7 +499,12 @@ class V11PeerDAW {
         return;
       }
       const moduleAction = event.target.closest('[data-module-action]');
-      if (moduleAction) this.handleModuleAction(moduleAction.dataset.moduleAction, moduleAction);
+      if (moduleAction) {
+        this.handleModuleAction(moduleAction.dataset.moduleAction, moduleAction);
+        return;
+      }
+      const workspaceViewAction = event.target.closest('[data-workspace-view]');
+      if (workspaceViewAction) this.setWorkspaceView(workspaceViewAction.dataset.workspaceView);
     });
     workspace?.addEventListener('pointerdown', (event) => this.handleArrangementPointerDown(event));
     workspace?.addEventListener('pointermove', (event) => this.handleArrangementPointerMove(event));
@@ -894,6 +899,33 @@ class V11PeerDAW {
 
   clipCapableModules() {
     return selectClipCapableModules(this.workspaceModules());
+  }
+
+  chainForModule(moduleId) {
+    return this.detectSignalChains().find((chain) => chain.includes(moduleId)) || [];
+  }
+
+  chainSummaryForModule(moduleId) {
+    const chain = this.chainForModule(moduleId);
+    if (!chain.length) return 'unpatched chain';
+    const modules = chain.map((id) => this.patchBay.modules.get(id)).filter(Boolean);
+    if (!modules.length) return 'unpatched chain';
+    return modules.map((module) => module.title).join(' → ');
+  }
+
+  moduleEditActionLabel(module) {
+    if (!module) return 'OPEN MODULE';
+    const haystack = `${module.moduleType || ''} ${module.kind || ''} ${module.title || ''}`.toLowerCase();
+    if (this.isSamplerModule(module)) return 'EDIT SAMPLES';
+    if (haystack.includes('drum')) return 'OPEN PADS';
+    if (Array.isArray(module.rows) || Array.isArray(module.steps)) return 'EDIT PATTERN';
+    return 'OPEN MODULE';
+  }
+
+  moduleOperationalHint(module) {
+    if (!module) return 'Open the target module to edit the sound source.';
+    const label = this.moduleEditActionLabel(module).replace('OPEN ', '').replace('EDIT ', '').toLowerCase();
+    return `This clip plays ${module.title}. Open ${label} to adjust the pattern, pads, samples, or generator controls.`;
   }
 
   makeClipSlot({ id, moduleId, title, note = 'C4', launchBeat = 0, stopBeat = null } = {}) {
@@ -2332,7 +2364,11 @@ class V11PeerDAW {
           const connType = this.chainConnectionType(modules[i - 1].id, modules[i].id);
           return `${acc}<div class="chain-arrow conn-${connType}"></div>${html}`;
         }, '');
-        return `<article class="signal-chain"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-flow">${nodes}</div></article>`;
+        const source = modules[0];
+        const output = modules[modules.length - 1];
+        const processors = modules.slice(1, -1);
+        const editable = modules.find((module) => this.moduleEditActionLabel(module) !== 'OPEN MODULE') || source;
+        return `<article class="signal-chain" data-chain-card="${this.escapeHtml(chain.join('>'))}"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-role-strip"><span>Source: ${this.escapeHtml(source?.title || 'unknown')}</span><span>Processor/Mixer: ${this.escapeHtml(processors.map((module) => module.title).join(' → ') || 'direct')}</span><span>Output: ${this.escapeHtml(output?.title || 'destination')}</span></div><p class="microcopy chain-edit-hint">${this.escapeHtml(this.moduleOperationalHint(editable))}</p><div class="chain-flow">${nodes}</div></article>`;
       })
       .join('');
 
@@ -2370,7 +2406,10 @@ class V11PeerDAW {
         .map((slot) => {
           const active = Boolean(slot.activeClipAt(this.currentBeat));
           const module = this.patchBay.modules.get(slot.moduleId);
-          return `<div class="clip-slot-row ${active ? 'active' : ''}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">${this.escapeHtml(module?.title || slot.moduleId)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
+          const chainSummary = this.chainSummaryForModule(slot.moduleId);
+          const editLabel = this.moduleEditActionLabel(module);
+          const hint = this.moduleOperationalHint(module);
+          return `<div class="clip-slot-row ${active ? 'active' : ''}" data-clip-slot-row="${this.escapeHtml(slot.id)}" data-module-id="${this.escapeHtml(slot.moduleId || '')}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">Module: ${this.escapeHtml(module?.title || slot.moduleId)} · Chain: ${this.escapeHtml(chainSummary)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span><p class="microcopy clip-edit-hint">${this.escapeHtml(hint)}</p></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">OPEN</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">${this.escapeHtml(editLabel)}</button><button type="button" data-workspace-view="chains">OPEN CHAIN</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
         })
         .join('');
       root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="create">CREATE CLIP</button><button type="button" data-clip-action="place-all">PLACE ALL</button><button type="button" data-clip-action="clear-arrangement">CLEAR ARRANGEMENT</button><span class="microcopy">beat ${this.escapeHtml(this.currentBeat)} · ${this.clipSlots.length} slots · backed by ClipSlot/Clip core</span></div><div class="workspace-list">${rows || '<p class="microcopy">No clip slots yet. Add a piano roll, OCRA grid, or sequencer, then create a clip.</p>'}</div>`;
@@ -2523,6 +2562,13 @@ class V11PeerDAW {
       }
       if (button.dataset.sampleAction === 'pick-upload') {
         document.querySelector('#sampleLibraryUploadFile')?.click();
+      }
+      if (button.dataset.sampleAction === 'open-editor') {
+        const moduleId = button.dataset.moduleId || slot?.dataset.moduleId || '';
+        if (moduleId && this.patchBay.modules.has(moduleId)) {
+          this.focusedModuleId = moduleId;
+          this.setWorkspaceView('module');
+        }
       }
     });
   }

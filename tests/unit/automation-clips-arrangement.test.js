@@ -131,6 +131,30 @@ describe('clips and session launch', () => {
     expect(slot.activeClipAt(12)).toBeNull();
   });
 
+  test('clip slot emits no packets at or after queued quantized stop beat', () => {
+    const clip = new Clip({
+      id: 'stoppable',
+      name: 'Stoppable Clip',
+      channelId: 'drums-1',
+      lengthBars: 4,
+      beatsPerBar: 4,
+      midi: [
+        { beat: 0, note: 'C4', velocity: 0.9, duration: 1 },
+        { beat: 8, note: 'D4', velocity: 0.7, duration: 1 },
+      ],
+    });
+    const slot = new ClipSlot({ channelId: 'drums-1', quantizationBeats: 4 });
+
+    expect(slot.queueLaunch(clip, 0)).toBe(0);
+    expect(slot.eventsAt(0)).toHaveLength(1);
+    expect(slot.queueStop(5)).toBe(8);
+
+    expect(slot.activeClipAt(7.999)).toBe(clip);
+    expect(slot.activeClipAt(8)).toBeNull();
+    expect(slot.eventsAt(8)).toEqual([]);
+    expect(slot.eventsAt(12)).toEqual([]);
+  });
+
   test('quantization helper snaps up to the next musical boundary', () => {
     expect(quantizeBeat(0, 4)).toBe(0);
     expect(quantizeBeat(0.01, 4)).toBe(4);

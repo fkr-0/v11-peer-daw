@@ -225,6 +225,12 @@ export class ClipSlot {
     if (this.stopBeat != null && beat >= this.stopBeat) return null;
     return this.clip;
   }
+
+  eventsAt(beat = 0) {
+    const clip = this.activeClipAt(beat);
+    if (!clip) return [];
+    return clip.eventsAt(beat, this.launchBeat);
+  }
 }
 
 export class Arrangement {

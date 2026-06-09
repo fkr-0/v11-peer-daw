@@ -63,6 +63,30 @@ describe('peer DAW example projects', () => {
     );
   });
 
+  test('each example can be grouped into visible signal chains with source processor and output labels', () => {
+    for (const example of peerDawExampleProjects) {
+      const modules = new Map(example.modules.map((module) => [module.id, module]));
+      const outbound = new Map(example.modules.map((module) => [module.id, []]));
+      const inbound = new Map(example.modules.map((module) => [module.id, []]));
+      for (const route of example.routes) {
+        outbound.get(route.from.moduleId)?.push(route.to.moduleId);
+        inbound.get(route.to.moduleId)?.push(route.from.moduleId);
+      }
+      const source = example.modules.find((module) => !inbound.get(module.id)?.length);
+      const chain = [];
+      let current = source?.id;
+      while (current && !chain.includes(current)) {
+        chain.push(current);
+        current = outbound.get(current)?.[0];
+      }
+      const chainModules = chain.map((id) => modules.get(id)).filter(Boolean);
+      expect(chainModules.length).toBeGreaterThanOrEqual(3);
+      expect(chainModules[0]?.title).toBeTruthy();
+      expect(chainModules.slice(1, -1).map((module) => module.title).join(' → ')).toBeTruthy();
+      expect(chainModules.at(-1)?.title).toBeTruthy();
+    }
+  });
+
   test('clock module serializes and hydrates bpm for example import/export correctness', () => {
     const clock = new ClockModule({ id: 'clock-test', title: 'Clock Test', bpm: 93 });
     expect(clock.serialize()).toMatchObject({ id: 'clock-test', moduleType: 'clock', bpm: 93 });

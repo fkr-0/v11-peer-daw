@@ -88,7 +88,10 @@ async function runSmoke() {
       const workspaceViews = ['session', 'chains', 'clips', 'arrangement', 'mixer', 'module'];
       for (const view of workspaceViews) {
         await page.click(`[data-workspace-view="${view}"]`);
-        await page.waitForTimeout(100);
+        await page.waitForFunction(
+          (expected) => document.querySelector('#workspaceMainView')?.textContent?.trim().length > 0 && document.querySelector(`[data-workspace-view="${expected}"]`),
+          view
+        );
         const state = await page.evaluate((expected) => {
           const workspace = document.querySelector('#workspaceMainView');
           const tab = document.querySelector(`[data-workspace-view="${expected}"]`);
@@ -102,6 +105,36 @@ async function runSmoke() {
         }, view);
         if (!state.hasTab || state.textLength <= 0) {
           throw new Error(`Workspace view did not render: ${JSON.stringify(state)}`);
+        }
+      }
+
+      await page.locator('details.sidebar-drawer', { hasText: 'Examples' }).evaluate((el) => {
+        el.open = true;
+      });
+      for (const exampleId of [
+        'detroit-pocket-conant-gardens-study',
+        'fall-in-love-remix-sketch',
+      ]) {
+        await page.selectOption('#exampleProjectSelect', exampleId);
+        await page.click('#btnLoadExampleProject');
+        await page.click('[data-workspace-view="clips"]');
+        const firstClip = page.locator('[data-clip-slot-row]').first();
+        await firstClip.waitFor({ state: 'visible' });
+        const clipText = await firstClip.textContent();
+        if (!clipText?.includes('Module:') || !clipText.includes('Chain:')) {
+          throw new Error(`Clip row lacks module/chain orientation for ${exampleId}: ${clipText}`);
+        }
+        await firstClip.locator('[data-clip-action="launch"]').click();
+        await page.waitForFunction(() => document.querySelector('[data-clip-slot-row]')?.textContent?.includes('playing'));
+        await firstClip.locator('[data-clip-action="stop"]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-clip-slot-row]')?.textContent?.includes('playing'));
+        await firstClip.locator('[data-workspace-view-target="module"]').first().click();
+        await page.waitForFunction(() => document.querySelector('#workspaceMainView')?.textContent?.match(/Open|notes|grid|Pad|Sample|Envelope/i));
+        await page.click('[data-workspace-view="chains"]');
+        await page.waitForSelector('[data-chain-card]', { state: 'visible' });
+        const chainText = await page.locator('[data-chain-card]').first().textContent();
+        if (!chainText?.includes('Source:') || !chainText.includes('Processor/Mixer:') || !chainText.includes('Output:')) {
+          throw new Error(`Chain card lacks role labels for ${exampleId}: ${chainText}`);
         }
       }
 

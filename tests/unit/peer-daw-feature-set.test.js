@@ -183,6 +183,28 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(html).toContain('id="composedSoundscapePresetJson"');
     expect(html).toContain('id="btnExportComposedSoundscapes"');
   });
+
+  test('clip rows expose module, chain, and direct editor navigation affordances', () => {
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    expect(app).toContain('data-clip-slot-row=');
+    expect(app).toContain('Module:');
+    expect(app).toContain('Chain:');
+    expect(app).toContain('data-workspace-view-target="module"');
+    expect(app).toContain('EDIT SAMPLES');
+    expect(app).toContain('OPEN PADS');
+    expect(app).toContain('OPEN CHAIN');
+  });
+
+  test('chain cards expose source, processor mixer, output, and edit hints', () => {
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    expect(app).toContain('data-chain-card=');
+    expect(app).toContain('Source:');
+    expect(app).toContain('Processor/Mixer:');
+    expect(app).toContain('Output:');
+    expect(app).toContain('chain-edit-hint');
+  });
 });
 
 describe('synth modules', () => {

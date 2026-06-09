@@ -39,6 +39,7 @@ describe('sample panel renderer', () => {
         sampleRef: 'sampler-1/sample',
         filename: '<lead>.wav',
         moduleTitle: 'Lead Sampler',
+        moduleId: 'lead-sampler',
         availability: 'syncing',
         progress: 0.42,
         sampleLengthMs: 1200,
@@ -52,6 +53,9 @@ describe('sample panel renderer', () => {
     expect(html).toContain('&lt;lead&gt;.wav');
     expect(html).toContain('data-sample-action="query-peer"');
     expect(html).toContain('data-sample-action="pick-upload"');
+    expect(html).toContain('data-sample-action="open-editor"');
+    expect(html).toContain('data-module-id="lead-sampler"');
+    expect(html).toContain('Open Samples to swap this buffer');
   });
 
   test('renders empty sample usage state', () => {
