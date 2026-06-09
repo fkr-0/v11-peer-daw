@@ -144,6 +144,18 @@ describe('SampleLibrary', () => {
       expect.objectContaining({ source: 'peer', peerId: 'peer-1', path: '/peer-pack/vox.wav' })
     );
   });
+
+  test('keeps same-named imported files as distinct library samples instead of overwriting', () => {
+    const library = new SampleLibrary();
+    library.addSample('/uploads', { filename: 'snare.wav', sampleLengthMs: 100 });
+    library.addSample('/uploads', { filename: 'snare.wav', sampleLengthMs: 220 });
+
+    const snares = library.listSamples().filter((sample) => sample.filename === 'snare.wav');
+
+    expect(snares).toHaveLength(2);
+    expect(snares.map((sample) => sample.sampleLengthMs)).toEqual([100, 220]);
+    expect(new Set(snares.map((sample) => sample.id)).size).toBe(2);
+  });
 });
 
 describe('project sample usage and missing sample slots', () => {

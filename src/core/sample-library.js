@@ -196,15 +196,28 @@ export class SampleLibrary {
   addSample(path = '/', sample = {}) {
     const dir = ensureDir(this.root, path);
     const normalized = normalizeSampleMetadata(sample);
+    const hasStableIdentity = Boolean(sample.id || sample.sampleRef);
     normalized.source = normalized.source || 'local';
-    normalized.path =
-      `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') ||
+    const basePath = `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') ||
       `/${normalized.filename}`;
+    normalized.path = basePath;
+
+    if (!hasStableIdentity) {
+      const baseId = normalized.id;
+      let suffix = 1;
+      while (dir.samples.some((entry) => entry.id === normalized.id || entry.path === normalized.path)) {
+        suffix += 1;
+        normalized.id = `${baseId}#${suffix}`;
+        normalized.path = basePath.replace(/(\.[^/.]+)?$/, `-${suffix}$1`);
+      }
+      dir.samples.push(normalized);
+      return normalized;
+    }
+
     const existingIndex = dir.samples.findIndex(
       (entry) =>
         entry.id === normalized.id ||
-        entry.filename === normalized.filename ||
-        entry.sampleRef === normalized.sampleRef
+        (normalized.sampleRef && entry.sampleRef === normalized.sampleRef)
     );
     if (existingIndex >= 0)
       dir.samples[existingIndex] = { ...dir.samples[existingIndex], ...normalized };

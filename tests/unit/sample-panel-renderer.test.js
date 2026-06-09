@@ -87,12 +87,23 @@ describe('sample panel renderer', () => {
           slotLabel: 'Snare',
           availability: 'empty',
         },
+        {
+          id: 'drums-1/hat',
+          sampleRef: 'drums-1/hat',
+          moduleId: 'drums-1',
+          moduleTitle: 'Drums',
+          slotLabel: 'Hat',
+          filename: 'hat.wav',
+          availability: 'missing',
+        },
       ],
       selectedSampleId: 'kick-1',
     });
 
     expect(html).toContain('sample-library-matrix');
     expect(html).toContain('data-sample-id="kick-1"');
+    expect(html).toContain('data-sample-action="preview-sample"');
+    expect(html).toContain('PREVIEW');
     expect(html).toContain('&lt;kick&gt;.wav');
     expect(html).not.toContain('<kick>');
     expect(html).toContain('data-sample-slot="drums-1/snare"');
@@ -101,5 +112,38 @@ describe('sample panel renderer', () => {
     expect(html).toContain('data-sample-action="open-editor"');
     expect(html).toContain('data-sample-action="query-peer"');
     expect(html).toContain('Selected sample');
+  });
+
+  test('renders empty slots without peer query and disables assignment until a sample is selected', () => {
+    const html = renderSampleLibraryMatrixHtml({
+      samples: [],
+      slots: [
+        {
+          id: 'drums-1/snare',
+          sampleRef: 'drums-1/snare',
+          moduleId: 'drums-1',
+          moduleTitle: 'Drums',
+          slotLabel: 'Snare',
+          availability: 'empty',
+        },
+        {
+          id: 'drums-1/kick',
+          sampleRef: 'drums-1/kick',
+          moduleId: 'drums-1',
+          moduleTitle: 'Drums',
+          slotLabel: 'Kick',
+          filename: 'kick.wav',
+          availability: 'missing',
+        },
+      ],
+    });
+
+    const emptySlotHtml = html.match(/<tr class="sample-matrix-slot state-empty"[\s\S]*?<\/tr>/)?.[0] || '';
+    const missingSlotHtml = html.match(/<tr class="sample-matrix-slot state-missing"[\s\S]*?<\/tr>/)?.[0] || '';
+
+    expect(emptySlotHtml).toContain('disabled');
+    expect(emptySlotHtml).toContain('Select a file first');
+    expect(emptySlotHtml).not.toContain('data-sample-action="query-peer"');
+    expect(missingSlotHtml).toContain('data-sample-action="query-peer"');
   });
 });

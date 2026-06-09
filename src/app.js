@@ -2645,6 +2645,10 @@ class V11PeerDAW {
       this.assignSelectedSampleToSlot(slotId);
       return;
     }
+    if (button.dataset.sampleAction === 'preview-sample') {
+      this.previewLibrarySample(button.dataset.sampleId || this.selectedSampleId);
+      return;
+    }
     if (button.dataset.sampleAction === 'query-peer') {
       this.sampleSync.requestSample({ slotId, sampleRef, filename, peerId: '' });
       this.sampleSyncProgress.set(slotId, { slotId, sampleRef, filename, progress: 0.05 });
@@ -2664,6 +2668,27 @@ class V11PeerDAW {
         this.setWorkspaceView('module');
       }
     }
+  }
+
+  previewLibrarySample(sampleId = '') {
+    const sample = this.sampleLibrary.findSample(sampleId);
+    if (!sample) {
+      this.logText('sample preview skipped: no library file selected');
+      return false;
+    }
+    const bytes = sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
+    if (!bytes.length) {
+      this.logText(`sample preview metadata: ${sample.filename}`);
+      return false;
+    }
+    const blob = new Blob([bytes], { type: sample.type || sample.mime || 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
+    audio.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+    audio.play?.().catch((error) => this.logText(`sample preview failed: ${error.message}`));
+    this.logText(`preview sample: ${sample.filename}`);
+    return true;
   }
 
   assignSelectedSampleToSlot(slotId = '') {

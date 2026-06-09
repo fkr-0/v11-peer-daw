@@ -31,24 +31,30 @@ export function renderProjectSampleUsageHtml(usage = []) {
 }
 
 export function renderSampleLibraryMatrixHtml({ samples = [], slots = [], selectedSampleId = '' } = {}) {
+  const hasSelectedSample = Boolean(selectedSampleId);
   const sampleRows = samples.length
     ? samples
         .map((sample) => {
           const selected = String(sample.id) === String(selectedSampleId);
-          return `<button type="button" class="sample-matrix-file ${selected ? 'selected-sample' : ''}" data-sample-action="select-library-sample" data-sample-id="${escapeHtml(sample.id)}"><strong>${escapeHtml(sample.filename)}</strong><small>${escapeHtml(sample.sampleLengthMs || 0)}ms · ${escapeHtml(sample.source || 'local')}</small>${selected ? '<span class="pill">Selected sample</span>' : ''}</button>`;
+          return `<tr class="sample-matrix-file ${selected ? 'selected-sample' : ''}" data-sample-id="${escapeHtml(sample.id)}"><td><strong>${escapeHtml(sample.filename)}</strong><small>${escapeHtml(sample.sampleLengthMs || 0)}ms · ${escapeHtml(sample.source || 'local')}</small>${selected ? '<span class="pill">Selected sample</span>' : ''}</td><td class="button-row"><button type="button" data-sample-action="select-library-sample" data-sample-id="${escapeHtml(sample.id)}">SELECT</button><button type="button" data-sample-action="preview-sample" data-sample-id="${escapeHtml(sample.id)}">PREVIEW</button></td></tr>`;
         })
         .join('')
-    : '<p class="microcopy">No files in the global sample library yet. Upload or import a library to start assigning samples.</p>';
+    : '<tr><td colspan="2" class="microcopy">No files in the global sample library yet. Upload or import a library to start assigning samples.</td></tr>';
 
   const slotRows = slots.length
     ? slots
         .map((slot) => {
           const status = slot.availability || slot.fillState || 'empty';
           const filename = slot.filename || 'open slot';
-          return `<article class="sample-matrix-slot state-${escapeHtml(status)}" data-sample-slot="${escapeHtml(slot.id)}" data-sample-ref="${escapeHtml(slot.sampleRef || slot.id)}" data-module-id="${escapeHtml(slot.moduleId || '')}" data-slot-id="${escapeHtml(slot.slotId || '')}"><div><strong>${escapeHtml(slot.moduleTitle || slot.moduleId || 'Module')}</strong><small>${escapeHtml(slot.slotLabel || slot.slotId || slot.sampleRef || slot.id)} · ${escapeHtml(filename)}</small></div><span class="pill">${escapeHtml(status)}</span><div class="button-row"><button type="button" data-sample-action="assign-selected" data-sample-slot="${escapeHtml(slot.id)}">ASSIGN SELECTED</button><button type="button" data-sample-action="pick-upload" data-sample-slot="${escapeHtml(slot.id)}">UPLOAD / REPLACE</button><button type="button" data-sample-action="query-peer" data-sample-slot="${escapeHtml(slot.id)}">QUERY PEERS</button><button type="button" data-sample-action="open-editor" data-module-id="${escapeHtml(slot.moduleId || '')}">OPEN MODULE</button></div></article>`;
+          const canQuery = status === 'missing';
+          const assignLabel = hasSelectedSample ? 'ASSIGN SELECTED' : 'Select a file first';
+          const queryButton = canQuery
+            ? `<button type="button" data-sample-action="query-peer" data-sample-slot="${escapeHtml(slot.id)}">QUERY PEERS</button>`
+            : '';
+          return `<tr class="sample-matrix-slot state-${escapeHtml(status)}" data-sample-slot="${escapeHtml(slot.id)}" data-sample-ref="${escapeHtml(slot.sampleRef || slot.id)}" data-module-id="${escapeHtml(slot.moduleId || '')}" data-slot-id="${escapeHtml(slot.slotId || '')}"><td><strong>${escapeHtml(slot.moduleTitle || slot.moduleId || 'Module')}</strong><small>${escapeHtml(slot.slotLabel || slot.slotId || slot.sampleRef || slot.id)} · ${escapeHtml(filename)}</small></td><td><span class="pill">${escapeHtml(status)}</span></td><td class="button-row"><button type="button" data-sample-action="assign-selected" data-sample-slot="${escapeHtml(slot.id)}" ${hasSelectedSample ? '' : 'disabled'}>${assignLabel}</button><button type="button" data-sample-action="pick-upload" data-sample-slot="${escapeHtml(slot.id)}">UPLOAD / REPLACE</button>${queryButton}<button type="button" data-sample-action="open-editor" data-module-id="${escapeHtml(slot.moduleId || '')}">OPEN MODULE</button></td></tr>`;
         })
         .join('')
-    : '<p class="microcopy">No sample-capable slots in this project yet. Add a sampler, drum sampler, or multisampler.</p>';
+    : '<tr><td colspan="3" class="microcopy">No sample-capable slots in this project yet. Add a sampler, drum sampler, or multisampler.</td></tr>';
 
-  return `<section class="sample-library-matrix"><article class="sample-matrix-column"><header><strong>Library files</strong><span class="pill">${samples.length}</span></header><div class="sample-matrix-files">${sampleRows}</div></article><article class="sample-matrix-column"><header><strong>Project sample slots</strong><span class="pill">${slots.length}</span></header><div class="sample-matrix-slots">${slotRows}</div></article></section>`;
+  return `<section class="sample-library-matrix"><article class="sample-matrix-column"><header><strong>Library files</strong><span class="pill">${samples.length}</span></header><table class="sample-matrix-table"><thead><tr><th>File</th><th>Actions</th></tr></thead><tbody>${sampleRows}</tbody></table></article><article class="sample-matrix-column"><header><strong>Project sample slots</strong><span class="pill">${slots.length}</span></header><table class="sample-matrix-table"><thead><tr><th>Slot</th><th>Status</th><th>Actions</th></tr></thead><tbody>${slotRows}</tbody></table></article></section>`;
 }
