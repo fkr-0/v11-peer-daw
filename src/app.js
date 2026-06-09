@@ -68,6 +68,7 @@ class V11PeerDAW {
     this.clock = null;
     this.mixer = null;
     this.focusedModuleId = null;
+    this.selectedChainId = null;
     this.currentBeat = 0;
     this.mixerState = { masterVolume: 0.8, channels: {} };
     this.clipSlotSequence = 1;
@@ -503,6 +504,11 @@ class V11PeerDAW {
         this.handleModuleAction(moduleAction.dataset.moduleAction, moduleAction);
         return;
       }
+      const chainAction = event.target.closest('[data-chain-action="view-chain"]');
+      if (chainAction) {
+        this.openSignalFlowForModule(chainAction.dataset.moduleId || '');
+        return;
+      }
       const workspaceViewAction = event.target.closest('[data-workspace-view]');
       if (workspaceViewAction) this.setWorkspaceView(workspaceViewAction.dataset.workspaceView);
     });
@@ -867,6 +873,13 @@ class V11PeerDAW {
     this.renderWorkspaceView();
   }
 
+  openSignalFlowForModule(moduleId) {
+    const chain = this.detectSignalChains().find((ids) => ids.includes(moduleId));
+    this.selectedChainId = chain?.join('>') || null;
+    this.refreshModuleChainBadges();
+    this.setWorkspaceView('chains');
+  }
+
   restoreWorkspaceView() {
     const saved = this.workspacePreferences.restoreWorkspaceView();
     if (saved) this.setWorkspaceView(saved);
@@ -911,6 +924,40 @@ class V11PeerDAW {
     const modules = chain.map((id) => this.patchBay.modules.get(id)).filter(Boolean);
     if (!modules.length) return 'unpatched chain';
     return modules.map((module) => module.title).join(' → ');
+  }
+
+  chainIdForModule(moduleId) {
+    const chain = this.chainForModule(moduleId);
+    return chain.length ? chain.join('>') : null;
+  }
+
+  chainDisplayName(chain) {
+    const modules = chain.map((id) => this.patchBay.modules.get(id)).filter(Boolean);
+    if (!modules.length) return 'Unpatched Chain';
+    const haystack = modules.map((module) => `${module.title} ${module.kind}`).join(' ').toLowerCase();
+    if (haystack.includes('drum')) return 'Drum Chain';
+    if (haystack.includes('bass')) return 'Bass Chain';
+    if (haystack.includes('chord') || haystack.includes('key') || haystack.includes('rhodes')) return 'Keys Chain';
+    if (haystack.includes('sample')) return 'Sampler Chain';
+    return `${modules[0].title} Chain`;
+  }
+
+  moduleChainBadgeHtml(module) {
+    const chain = this.chainForModule(module?.id);
+    const chainId = chain.length ? chain.join('>') : '';
+    const label = chain.length ? this.chainDisplayName(chain) : 'Unpatched';
+    const selected = chainId && chainId === this.selectedChainId;
+    return `<div class="module-chain-badge ${selected ? 'selected-chain-module' : ''}" data-chain-module-id="${this.escapeHtml(module?.id || '')}" data-chain-id="${this.escapeHtml(chainId)}"><span>Chain: ${this.escapeHtml(label)}</span><button type="button" data-chain-action="view-chain" data-module-id="${this.escapeHtml(module?.id || '')}">View Chain</button></div>`;
+  }
+
+  refreshModuleChainBadges() {
+    for (const card of this.modulesEl?.querySelectorAll?.('[data-module-id]') || []) {
+      const module = this.patchBay.modules.get(card.dataset.moduleId);
+      const badge = card.querySelector('.module-chain-badge');
+      if (module && badge) badge.outerHTML = this.moduleChainBadgeHtml(module);
+      const chainId = this.chainIdForModule(card.dataset.moduleId);
+      card.classList.toggle('selected-chain-module', Boolean(chainId && chainId === this.selectedChainId));
+    }
   }
 
   moduleEditActionLabel(module) {
@@ -2368,7 +2415,9 @@ class V11PeerDAW {
         const output = modules[modules.length - 1];
         const processors = modules.slice(1, -1);
         const editable = modules.find((module) => this.moduleEditActionLabel(module) !== 'OPEN MODULE') || source;
-        return `<article class="signal-chain" data-chain-card="${this.escapeHtml(chain.join('>'))}"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-role-strip"><span>Source: ${this.escapeHtml(source?.title || 'unknown')}</span><span>Processor/Mixer: ${this.escapeHtml(processors.map((module) => module.title).join(' → ') || 'direct')}</span><span>Output: ${this.escapeHtml(output?.title || 'destination')}</span></div><p class="microcopy chain-edit-hint">${this.escapeHtml(this.moduleOperationalHint(editable))}</p><div class="chain-flow">${nodes}</div></article>`;
+        const chainId = chain.join('>');
+        const selected = chainId === this.selectedChainId;
+        return `<article class="signal-chain ${selected ? 'selected-chain' : ''}" data-chain-card="${this.escapeHtml(chainId)}" data-selected-chain="${selected ? 'true' : 'false'}"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-role-strip"><span>Source: ${this.escapeHtml(source?.title || 'unknown')}</span><span>Processor/Mixer: ${this.escapeHtml(processors.map((module) => module.title).join(' → ') || 'direct')}</span><span>Output: ${this.escapeHtml(output?.title || 'destination')}</span></div><p class="microcopy chain-edit-hint">${this.escapeHtml(this.moduleOperationalHint(editable))}</p><div class="chain-flow">${nodes}</div></article>`;
       })
       .join('');
 
@@ -2390,6 +2439,7 @@ class V11PeerDAW {
     const view = this.workspaceView || 'session';
     if (view === 'chains') {
       root.innerHTML = this.renderChainView();
+      root.querySelector(`[data-chain-card="${CSS.escape(this.selectedChainId || '')}"]`)?.scrollIntoView?.({ block: 'nearest' });
       return;
     }
     if (view === 'session') {
@@ -2397,7 +2447,10 @@ class V11PeerDAW {
         (activeSession?.participants?.length || 1) +
         this.localSessionPeers.size +
         this.peerList.length;
-      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
+      const chains = this.detectSignalChains();
+      const assigned = new Set(chains.flat());
+      const unpatched = modules.filter((module) => !assigned.has(module.id)).length;
+      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
       return;
     }
     if (view === 'clips') {
@@ -2409,7 +2462,7 @@ class V11PeerDAW {
           const chainSummary = this.chainSummaryForModule(slot.moduleId);
           const editLabel = this.moduleEditActionLabel(module);
           const hint = this.moduleOperationalHint(module);
-          return `<div class="clip-slot-row ${active ? 'active' : ''}" data-clip-slot-row="${this.escapeHtml(slot.id)}" data-module-id="${this.escapeHtml(slot.moduleId || '')}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">Module: ${this.escapeHtml(module?.title || slot.moduleId)} · Chain: ${this.escapeHtml(chainSummary)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span><p class="microcopy clip-edit-hint">${this.escapeHtml(hint)}</p></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">OPEN</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">${this.escapeHtml(editLabel)}</button><button type="button" data-workspace-view="chains">OPEN CHAIN</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
+          return `<div class="clip-slot-row ${active ? 'active' : ''}" data-clip-slot-row="${this.escapeHtml(slot.id)}" data-module-id="${this.escapeHtml(slot.moduleId || '')}" data-chain-module-id="${this.escapeHtml(slot.moduleId || '')}"><div><strong>${this.escapeHtml(slot.name || slot.clip?.name || slot.id)}</strong><span class="microcopy">Module: ${this.escapeHtml(module?.title || slot.moduleId)} · Chain: ${this.escapeHtml(chainSummary)} · ${this.escapeHtml(slot.clip?.midi?.length || 0)} notes · q${this.escapeHtml(slot.quantizationBeats)}</span><p class="microcopy clip-edit-hint">${this.escapeHtml(hint)}</p></div><span class="pill">${active ? 'playing' : slot.launchBeat == null ? 'empty' : 'queued'}</span><div class="button-row"><button type="button" data-clip-action="launch" data-slot-id="${this.escapeHtml(slot.id)}">LAUNCH</button><button type="button" data-clip-action="stop" data-slot-id="${this.escapeHtml(slot.id)}">STOP</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">OPEN</button><button type="button" data-module-action="focus-module" data-workspace-view-target="module" data-module-id="${this.escapeHtml(slot.moduleId || '')}">${this.escapeHtml(editLabel)}</button><button type="button" data-chain-action="view-chain" data-module-id="${this.escapeHtml(slot.moduleId || '')}">View Chain</button><button type="button" data-clip-action="place" data-slot-id="${this.escapeHtml(slot.id)}">PLACE</button><button type="button" data-clip-action="delete" data-slot-id="${this.escapeHtml(slot.id)}">DEL</button></div></div>`;
         })
         .join('');
       root.innerHTML = `<div class="workspace-toolbar"><button type="button" data-clip-action="create">CREATE CLIP</button><button type="button" data-clip-action="place-all">PLACE ALL</button><button type="button" data-clip-action="clear-arrangement">CLEAR ARRANGEMENT</button><span class="microcopy">beat ${this.escapeHtml(this.currentBeat)} · ${this.clipSlots.length} slots · backed by ClipSlot/Clip core</span></div><div class="workspace-list">${rows || '<p class="microcopy">No clip slots yet. Add a piano roll, OCRA grid, or sequencer, then create a clip.</p>'}</div>`;
@@ -2815,10 +2868,11 @@ class V11PeerDAW {
     this.renderPatchCanvas();
 
     const card = document.createElement('article');
-    card.className = `module-card kind-${module.kind}`;
+    const chainId = this.chainIdForModule(module.id);
+    card.className = `module-card kind-${module.kind} ${chainId && chainId === this.selectedChainId ? 'selected-chain-module' : ''}`;
     card.dataset.moduleId = module.id;
     card.innerHTML =
-      '<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div><div class="mount"></div>';
+      `<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div>${this.moduleChainBadgeHtml(module)}<div class="mount"></div>`;
     this.modulesEl.appendChild(card);
     module.mount(card.querySelector('.mount'));
     module.addEventListener?.('sample-library-sync', (event) =>
@@ -2951,6 +3005,7 @@ class V11PeerDAW {
   handlePatchGraphChange() {
     this.syncAudioGraph();
     this.renderRoutes();
+    this.refreshModuleChainBadges();
     this.updateStats();
     this.renderWorkspaceView();
     this.publishProjectChange('patch-graph-change');
@@ -3138,6 +3193,7 @@ class V11PeerDAW {
       this.restoreRoutingGraphState(project);
       this.patchCanvas?.restorePositions?.(project.canvasPositions || {});
       this.renderRoutes();
+      this.refreshModuleChainBadges();
       this.renderPatchCanvas();
       this.ensureDefaultClipSlots();
       this.updateStats();

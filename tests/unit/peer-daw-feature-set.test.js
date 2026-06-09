@@ -193,7 +193,26 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(app).toContain('data-workspace-view-target="module"');
     expect(app).toContain('EDIT SAMPLES');
     expect(app).toContain('OPEN PADS');
-    expect(app).toContain('OPEN CHAIN');
+    expect(app).toContain('View Chain');
+    expect(app).toContain('data-chain-module-id');
+  });
+
+  test('signal flow workspace is promoted for module-chain discovery', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    expect(html).toContain('Signal Flow');
+    expect(app).toContain('signal-flow-overview-card');
+    expect(app).toContain('Inspect Signal Flow');
+    expect(app).toContain('selectedChainId');
+  });
+
+  test('module cards expose chain badges and selected-chain affordances', () => {
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    expect(app).toContain('module-chain-badge');
+    expect(app).toContain('data-chain-action="view-chain"');
+    expect(app).toContain('selected-chain-module');
   });
 
   test('chain cards expose source, processor mixer, output, and edit hints', () => {

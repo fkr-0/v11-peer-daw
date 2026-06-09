@@ -838,6 +838,34 @@ optgroup {
   overflow: hidden;
 }
 
+.signal-chain.selected-chain {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
+}
+
+.signal-flow-overview-card {
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-primary));
+}
+
+.module-chain-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.module-chain-badge.selected-chain-module,
+.module-card.selected-chain-module {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+}
+
 .chain-header {
   display: flex;
   align-items: center;
