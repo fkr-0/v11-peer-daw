@@ -82,7 +82,12 @@ describe('peer DAW example projects', () => {
       const chainModules = chain.map((id) => modules.get(id)).filter(Boolean);
       expect(chainModules.length).toBeGreaterThanOrEqual(3);
       expect(chainModules[0]?.title).toBeTruthy();
-      expect(chainModules.slice(1, -1).map((module) => module.title).join(' → ')).toBeTruthy();
+      expect(
+        chainModules
+          .slice(1, -1)
+          .map((module) => module.title)
+          .join(' → ')
+      ).toBeTruthy();
       expect(chainModules.at(-1)?.title).toBeTruthy();
     }
   });

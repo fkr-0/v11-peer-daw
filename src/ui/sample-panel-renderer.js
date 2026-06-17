@@ -30,7 +30,11 @@ export function renderProjectSampleUsageHtml(usage = []) {
     .join('');
 }
 
-export function renderSampleLibraryMatrixHtml({ samples = [], slots = [], selectedSampleId = '' } = {}) {
+export function renderSampleLibraryMatrixHtml({
+  samples = [],
+  slots = [],
+  selectedSampleId = '',
+} = {}) {
   const hasSelectedSample = Boolean(selectedSampleId);
   const sampleRows = samples.length
     ? samples

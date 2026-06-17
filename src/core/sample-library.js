@@ -198,14 +198,17 @@ export class SampleLibrary {
     const normalized = normalizeSampleMetadata(sample);
     const hasStableIdentity = Boolean(sample.id || sample.sampleRef);
     normalized.source = normalized.source || 'local';
-    const basePath = `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') ||
+    const basePath =
+      `${String(path).replace(/\/$/, '')}/${normalized.filename}`.replace(/\/+/g, '/') ||
       `/${normalized.filename}`;
     normalized.path = basePath;
 
     if (!hasStableIdentity) {
       const baseId = normalized.id;
       let suffix = 1;
-      while (dir.samples.some((entry) => entry.id === normalized.id || entry.path === normalized.path)) {
+      while (
+        dir.samples.some((entry) => entry.id === normalized.id || entry.path === normalized.path)
+      ) {
         suffix += 1;
         normalized.id = `${baseId}#${suffix}`;
         normalized.path = basePath.replace(/(\.[^/.]+)?$/, `-${suffix}$1`);
@@ -298,7 +301,7 @@ function moduleSampleSlots(module = {}, { includeOpen = false } = {}) {
     moduleType: module.moduleType || module.kind,
   };
 
-  if (module.sampleRef || includeOpen && moduleType === 'sampler') {
+  if (module.sampleRef || (includeOpen && moduleType === 'sampler')) {
     const sampleRef = module.sampleRef || `${module.id}/sample`;
     const filename = sampleFilename(module.fileName, module.label, module.sampleMetadata?.filename);
     const assigned = Boolean(module.sampleRef || filename);
@@ -334,9 +337,10 @@ function moduleSampleSlots(module = {}, { includeOpen = false } = {}) {
   }
 
   const zones = module.zones || [];
-  const openZones = includeOpen && moduleType === 'multisampler' && zones.length === 0
-    ? [{ rootNote: 'C4', name: 'Empty zone' }]
-    : zones;
+  const openZones =
+    includeOpen && moduleType === 'multisampler' && zones.length === 0
+      ? [{ rootNote: 'C4', name: 'Empty zone' }]
+      : zones;
   for (const [zoneIndex, zone] of openZones.entries()) {
     if (!includeOpen && !zone.sampleRef) continue;
     const slotId = zone.rootNote || `zone-${zoneIndex + 1}`;

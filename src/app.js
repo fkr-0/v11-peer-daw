@@ -943,10 +943,14 @@ class V11PeerDAW {
   chainDisplayName(chain) {
     const modules = chain.map((id) => this.patchBay.modules.get(id)).filter(Boolean);
     if (!modules.length) return 'Unpatched Chain';
-    const haystack = modules.map((module) => `${module.title} ${module.kind}`).join(' ').toLowerCase();
+    const haystack = modules
+      .map((module) => `${module.title} ${module.kind}`)
+      .join(' ')
+      .toLowerCase();
     if (haystack.includes('drum')) return 'Drum Chain';
     if (haystack.includes('bass')) return 'Bass Chain';
-    if (haystack.includes('chord') || haystack.includes('key') || haystack.includes('rhodes')) return 'Keys Chain';
+    if (haystack.includes('chord') || haystack.includes('key') || haystack.includes('rhodes'))
+      return 'Keys Chain';
     if (haystack.includes('sample')) return 'Sampler Chain';
     return `${modules[0].title} Chain`;
   }
@@ -965,13 +969,17 @@ class V11PeerDAW {
       const badge = card.querySelector('.module-chain-badge');
       if (module && badge) badge.outerHTML = this.moduleChainBadgeHtml(module);
       const chainId = this.chainIdForModule(card.dataset.moduleId);
-      card.classList.toggle('selected-chain-module', Boolean(chainId && chainId === this.selectedChainId));
+      card.classList.toggle(
+        'selected-chain-module',
+        Boolean(chainId && chainId === this.selectedChainId)
+      );
     }
   }
 
   moduleEditActionLabel(module) {
     if (!module) return 'OPEN MODULE';
-    const haystack = `${module.moduleType || ''} ${module.kind || ''} ${module.title || ''}`.toLowerCase();
+    const haystack =
+      `${module.moduleType || ''} ${module.kind || ''} ${module.title || ''}`.toLowerCase();
     if (this.isSamplerModule(module)) return 'EDIT SAMPLES';
     if (haystack.includes('drum')) return 'OPEN PADS';
     if (Array.isArray(module.rows) || Array.isArray(module.steps)) return 'EDIT PATTERN';
@@ -980,7 +988,10 @@ class V11PeerDAW {
 
   moduleOperationalHint(module) {
     if (!module) return 'Open the target module to edit the sound source.';
-    const label = this.moduleEditActionLabel(module).replace('OPEN ', '').replace('EDIT ', '').toLowerCase();
+    const label = this.moduleEditActionLabel(module)
+      .replace('OPEN ', '')
+      .replace('EDIT ', '')
+      .toLowerCase();
     return `This clip plays ${module.title}. Open ${label} to adjust the pattern, pads, samples, or generator controls.`;
   }
 
@@ -2423,7 +2434,8 @@ class V11PeerDAW {
         const source = modules[0];
         const output = modules[modules.length - 1];
         const processors = modules.slice(1, -1);
-        const editable = modules.find((module) => this.moduleEditActionLabel(module) !== 'OPEN MODULE') || source;
+        const editable =
+          modules.find((module) => this.moduleEditActionLabel(module) !== 'OPEN MODULE') || source;
         const chainId = chain.join('>');
         const selected = chainId === this.selectedChainId;
         return `<article class="signal-chain ${selected ? 'selected-chain' : ''}" data-chain-card="${this.escapeHtml(chainId)}" data-selected-chain="${selected ? 'true' : 'false'}"><div class="chain-header"><strong>${this.escapeHtml(label)}</strong><span class="chain-badge">${modules.length} modules</span></div><div class="chain-role-strip"><span>Source: ${this.escapeHtml(source?.title || 'unknown')}</span><span>Processor/Mixer: ${this.escapeHtml(processors.map((module) => module.title).join(' → ') || 'direct')}</span><span>Output: ${this.escapeHtml(output?.title || 'destination')}</span></div><p class="microcopy chain-edit-hint">${this.escapeHtml(this.moduleOperationalHint(editable))}</p><div class="chain-flow">${nodes}</div></article>`;
@@ -2460,7 +2472,9 @@ class V11PeerDAW {
     const view = this.workspaceView || 'session';
     if (view === 'chains') {
       root.innerHTML = this.renderChainView();
-      root.querySelector(`[data-chain-card="${CSS.escape(this.selectedChainId || '')}"]`)?.scrollIntoView?.({ block: 'nearest' });
+      root
+        .querySelector(`[data-chain-card="${CSS.escape(this.selectedChainId || '')}"]`)
+        ?.scrollIntoView?.({ block: 'nearest' });
       return;
     }
     if (view === 'session') {
@@ -2678,7 +2692,8 @@ class V11PeerDAW {
       this.logText('sample preview skipped: no library file selected');
       return false;
     }
-    const bytes = sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
+    const bytes =
+      sample.bytes instanceof Uint8Array ? sample.bytes : Uint8Array.from(sample.bytes || []);
     if (!bytes.length) {
       this.logText(`sample preview metadata: ${sample.filename}`);
       return false;
@@ -2696,7 +2711,9 @@ class V11PeerDAW {
   assignSelectedSampleToSlot(slotId = '') {
     const sample = this.sampleLibrary.findSample(this.selectedSampleId);
     const project = this.serializeRig();
-    const slot = detectProjectSampleSlots(project, this.sampleLibrary).find((entry) => entry.id === slotId);
+    const slot = detectProjectSampleSlots(project, this.sampleLibrary).find(
+      (entry) => entry.id === slotId
+    );
     if (!sample || !slot) {
       this.logText('sample assignment skipped: select a sample and slot first');
       return false;
@@ -2714,15 +2731,20 @@ class V11PeerDAW {
     } else if (typeof module.assignPad === 'function') {
       module.assignPad(slot.slotId, { fileName: sample.filename });
     } else if (Array.isArray(module.zones)) {
-      const existing = module.zones.find((zone) => zone.rootNote === slot.slotId || zone.name === slot.filename);
+      const existing = module.zones.find(
+        (zone) => zone.rootNote === slot.slotId || zone.name === slot.filename
+      );
       if (existing) existing.name = sample.filename;
-      else module.zones.push({ name: sample.filename, rootNote: slot.slotId || 'C4', buffer: null });
+      else
+        module.zones.push({ name: sample.filename, rootNote: slot.slotId || 'C4', buffer: null });
       module.render?.();
     }
     this.renderSamplePanels();
     this.renderWorkspaceView();
     this.publishProjectChange('sample-assigned');
-    this.logText(`assigned ${sample.filename} to ${slot.moduleTitle} / ${slot.slotLabel || slot.slotId}`);
+    this.logText(
+      `assigned ${sample.filename} to ${slot.moduleTitle} / ${slot.slotLabel || slot.slotId}`
+    );
     return true;
   }
 
@@ -2783,7 +2805,7 @@ class V11PeerDAW {
   renderSamplePanels() {
     this.renderSampleLibraryTree();
     this.renderProjectSampleUsage();
-    if (this.workspaceView == 'samples') this.renderWorkspaceView();
+    if (this.workspaceView === 'samples') this.renderWorkspaceView();
   }
 
   renderSampleLibraryTree() {
@@ -2982,8 +3004,7 @@ class V11PeerDAW {
     const chainId = this.chainIdForModule(module.id);
     card.className = `module-card kind-${module.kind} ${chainId && chainId === this.selectedChainId ? 'selected-chain-module' : ''}`;
     card.dataset.moduleId = module.id;
-    card.innerHTML =
-      `<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div>${this.moduleChainBadgeHtml(module)}<div class="mount"></div>`;
+    card.innerHTML = `<div class="module-actions"><button class="remove" title="remove module">Remove</button><button class="focus" title="focus module">Focus</button></div>${this.moduleChainBadgeHtml(module)}<div class="mount"></div>`;
     this.modulesEl.appendChild(card);
     module.mount(card.querySelector('.mount'));
     module.addEventListener?.('sample-library-sync', (event) =>

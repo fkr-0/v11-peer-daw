@@ -138,8 +138,10 @@ describe('sample panel renderer', () => {
       ],
     });
 
-    const emptySlotHtml = html.match(/<tr class="sample-matrix-slot state-empty"[\s\S]*?<\/tr>/)?.[0] || '';
-    const missingSlotHtml = html.match(/<tr class="sample-matrix-slot state-missing"[\s\S]*?<\/tr>/)?.[0] || '';
+    const emptySlotHtml =
+      html.match(/<tr class="sample-matrix-slot state-empty"[\s\S]*?<\/tr>/)?.[0] || '';
+    const missingSlotHtml =
+      html.match(/<tr class="sample-matrix-slot state-missing"[\s\S]*?<\/tr>/)?.[0] || '';
 
     expect(emptySlotHtml).toContain('disabled');
     expect(emptySlotHtml).toContain('Select a file first');

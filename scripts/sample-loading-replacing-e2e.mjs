@@ -107,54 +107,99 @@ async function runSampleE2E() {
       await page.setInputFiles('#sampleLibraryUploadFile', [firstPath, duplicateNamePath]);
       await page.click('[data-workspace-view="samples"]');
       await page.waitForSelector('.sample-library-matrix', { state: 'visible' });
-      await page.waitForSelector('[data-sample-action="select-library-sample"]', { state: 'visible' });
+      await page.waitForSelector('[data-sample-action="select-library-sample"]', {
+        state: 'visible',
+      });
 
       const libraryRowsAfterImport = await page.locator('.sample-matrix-file').count();
       if (libraryRowsAfterImport < 2) {
-        throw new Error(`Expected duplicate-name uploads to remain distinct rows, got ${libraryRowsAfterImport}`);
+        throw new Error(
+          `Expected duplicate-name uploads to remain distinct rows, got ${libraryRowsAfterImport}`
+        );
       }
 
       const targetSlot = page.locator('.sample-matrix-slot').first();
       await targetSlot.waitFor({ state: 'visible' });
-      const disabledAssignCount = await targetSlot.locator('[data-sample-action="assign-selected"][disabled]').count();
+      const disabledAssignCount = await targetSlot
+        .locator('[data-sample-action="assign-selected"][disabled]')
+        .count();
       if (disabledAssignCount !== 1) {
         throw new Error('Assign button should be disabled until a library file is selected.');
       }
 
       await page.locator('[data-sample-action="select-library-sample"]').first().click();
-      await page.waitForFunction(() => document.querySelector('.sample-library-matrix')?.textContent?.includes('Selected sample'));
+      await page.waitForFunction(() =>
+        document.querySelector('.sample-library-matrix')?.textContent?.includes('Selected sample')
+      );
       await targetSlot.locator('[data-sample-action="assign-selected"]').click();
-      await page.waitForFunction(
-        () => window.v11PeerDAW?.serializeRig?.()?.modules?.some((module) => module.sampleMetadata?.filename === 'same-name.wav'),
-        null,
-        { timeout: 5000 }
-      ).catch(() => { throw new Error('Initial selected-sample assignment did not persist same-name.wav in project JSON'); });
+      await page
+        .waitForFunction(
+          () =>
+            window.v11PeerDAW
+              ?.serializeRig?.()
+              ?.modules?.some((module) => module.sampleMetadata?.filename === 'same-name.wav'),
+          null,
+          { timeout: 5000 }
+        )
+        .catch(() => {
+          throw new Error(
+            'Initial selected-sample assignment did not persist same-name.wav in project JSON'
+          );
+        });
 
       const assignedFilename = await projectSamplerFilename(page);
       if (assignedFilename !== 'same-name.wav') {
-        throw new Error(`Expected initial assignment to persist in project JSON, got ${assignedFilename}`);
+        throw new Error(
+          `Expected initial assignment to persist in project JSON, got ${assignedFilename}`
+        );
       }
 
       await targetSlot.locator('[data-sample-action="pick-upload"]').click();
       await page.setInputFiles('#sampleLibraryUploadFile', replacementPath);
-      await page.waitForFunction(
-        () => window.v11PeerDAW?.serializeRig?.()?.modules?.some((module) => module.sampleMetadata?.filename === 'replacement-snare.wav'),
-        null,
-        { timeout: 5000 }
-      ).catch(() => { throw new Error('Slot-targeted upload replacement did not persist replacement-snare.wav in project JSON'); });
+      await page
+        .waitForFunction(
+          () =>
+            window.v11PeerDAW
+              ?.serializeRig?.()
+              ?.modules?.some(
+                (module) => module.sampleMetadata?.filename === 'replacement-snare.wav'
+              ),
+          null,
+          { timeout: 5000 }
+        )
+        .catch(() => {
+          throw new Error(
+            'Slot-targeted upload replacement did not persist replacement-snare.wav in project JSON'
+          );
+        });
 
       const replacedFilename = await projectSamplerFilename(page);
       if (replacedFilename !== 'replacement-snare.wav') {
-        throw new Error(`Expected slot-targeted replacement to persist in project JSON, got ${replacedFilename}`);
+        throw new Error(
+          `Expected slot-targeted replacement to persist in project JSON, got ${replacedFilename}`
+        );
       }
 
       await page.click('[data-workspace-view="samples"]');
-      await page.locator('.sample-matrix-slot').first().locator('[data-sample-action="open-editor"]').click();
-      await page.waitForFunction(
-        () => document.querySelector('#workspaceMainView')?.textContent?.includes('replacement-snare.wav'),
-        null,
-        { timeout: 5000 }
-      ).catch(() => { throw new Error('Opening the replaced sample slot did not show replacement-snare.wav in the module editor'); });
+      await page
+        .locator('.sample-matrix-slot')
+        .first()
+        .locator('[data-sample-action="open-editor"]')
+        .click();
+      await page
+        .waitForFunction(
+          () =>
+            document
+              .querySelector('#workspaceMainView')
+              ?.textContent?.includes('replacement-snare.wav'),
+          null,
+          { timeout: 5000 }
+        )
+        .catch(() => {
+          throw new Error(
+            'Opening the replaced sample slot did not show replacement-snare.wav in the module editor'
+          );
+        });
 
       await page.click('[data-workspace-view="samples"]');
       const matrixText = await page.locator('.sample-library-matrix').textContent();
