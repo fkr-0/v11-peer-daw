@@ -12,6 +12,8 @@ export class PeernetStack extends EventTarget {
     this.sessions = null;
     this.storage = null;
     this.started = false;
+    this.storageStarted = false;
+    this.lastHealth = null;
   }
 
   available() {
@@ -71,6 +73,30 @@ export class PeernetStack extends EventTarget {
     return true;
   }
 
+  reconnect(profile = {}) {
+    if (!this.core && !this.init(profile)) return false;
+    this.core?.setIdentity?.(profile);
+    this.core?.stop?.();
+    this.started = false;
+    const started = this.start(profile);
+    if (started) this.emit('health', this.health());
+    return started;
+  }
+
+  health() {
+    return (
+      this.core?.health?.() ||
+      this.lastHealth || {
+        state: this.started ? 'connecting' : 'idle',
+        connected: false,
+        role: 'offline',
+        peerCount: 0,
+        lastError: null,
+        changedAt: Date.now(),
+      }
+    );
+  }
+
   bindEvents() {
     if (this._bound) return;
     this._bound = true;
@@ -90,6 +116,10 @@ export class PeernetStack extends EventTarget {
         warning: true,
       })
     );
+    this.core?.on('health', (health) => {
+      this.lastHealth = health || this.core?.health?.() || null;
+      this.emit('health', this.lastHealth);
+    });
     this.core?.on('peers', (peers) => this.emit('peers', peers || []));
     this.core?.on('message:pmg-packet', (payload) => this.emit('packet', payload?.data || payload));
     this.core?.on('message:pmg-patch', (payload) => this.emit('patch', payload?.data || payload));
@@ -99,10 +129,14 @@ export class PeernetStack extends EventTarget {
   }
 
   start(profile = {}) {
-    if (!this.init(profile)) return false;
+    if (!this.core && !this.init(profile)) return false;
+    this.core?.setIdentity?.(profile);
     if (!this.started) {
       this.core.start();
-      this.storage.startAutosave();
+      if (!this.storageStarted) {
+        this.storage.startAutosave();
+        this.storageStarted = true;
+      }
       this.started = true;
     }
     return true;

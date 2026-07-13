@@ -137,6 +137,43 @@ body {
   border-radius: var(--radius-sm);
 }
 
+.status-indicator[data-state="connected"],
+.status-indicator[data-state="hosting"] {
+  color: var(--accent-success);
+  border: 1px solid color-mix(in srgb, var(--accent-success), transparent 58%);
+}
+
+.status-indicator[data-state="connecting"],
+.status-indicator[data-state="joining"],
+.status-indicator[data-state="reconnecting"] {
+  color: var(--accent-warning);
+  border: 1px solid color-mix(in srgb, var(--accent-warning), transparent 62%);
+}
+
+.status-indicator[data-state="offline"],
+.status-indicator[data-state="destroyed"] {
+  color: var(--accent-danger);
+  border: 1px solid color-mix(in srgb, var(--accent-danger), transparent 58%);
+}
+
+kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--border-primary);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: 10px/1.2 var(--font-mono);
+}
+
+.btn-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-color: var(--border-accent);
+  background: rgba(110, 198, 255, 0.08);
+}
+
 /* Buttons */
 button {
   font-family: inherit;
@@ -1684,6 +1721,143 @@ optgroup {
   border-left: 3px solid var(--accent-danger);
 }
 
+/* Keyboard-first command center */
+.command-center {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: start center;
+  padding: min(12vh, 96px) 16px 16px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+
+.command-center.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.command-center-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 3, 8, 0.78);
+  backdrop-filter: blur(12px);
+}
+
+.command-center-dialog {
+  position: relative;
+  width: min(760px, 100%);
+  max-height: min(74vh, 720px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  background: rgba(18, 18, 26, 0.98);
+  box-shadow: var(--shadow-lg), 0 0 42px rgba(110, 198, 255, 0.16);
+}
+
+.command-center-header,
+.command-center-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-center-header h2 {
+  margin: 0 0 2px;
+  font: 600 15px/1.3 var(--font-sans);
+}
+
+.command-center-header p,
+.command-center-footer {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.command-center-input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 13px/1.4 var(--font-mono);
+}
+
+.command-center-results {
+  min-height: 80px;
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.command-center-result {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border-color: transparent;
+  background: var(--bg-tertiary);
+  text-align: left;
+  box-shadow: none;
+}
+
+.command-center-result.active,
+.command-center-result[aria-selected="true"] {
+  border-color: var(--accent-primary);
+  background: rgba(110, 198, 255, 0.13);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.command-center-result-main,
+.command-center-result-title,
+.command-center-result-detail {
+  min-width: 0;
+}
+
+.command-center-result-title,
+.command-center-result-detail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-center-result-detail {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.command-center-result-kind {
+  color: var(--accent-primary);
+  font: 600 9px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-center-empty {
+  padding: 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
   .workspace {
@@ -1700,6 +1874,11 @@ optgroup {
   .sidebar-left,
   .inspector {
     max-height: 200px;
+  }
+
+  .topbar,
+  .transport {
+    flex-wrap: wrap;
   }
 }
 

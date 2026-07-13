@@ -29,11 +29,54 @@
     this.listeners = {};
     this.started = false;
     this.debug = !!opts.debug;
+    this.state = 'idle';
+    this.lastStateAt = now();
+    this.lastError = null;
   }
 
   PeernetSharedCore.prototype.on = function (event, fn) {
     if (!this.listeners[event]) this.listeners[event] = [];
     this.listeners[event].push(fn);
+    return this;
+  };
+
+  PeernetSharedCore.prototype.health = function () {
+    return {
+      state: this.state,
+      connected: this.state === 'connected' || this.state === 'hosting',
+      role: this.isHub ? 'hub' : (this.state === 'connected' ? 'client' : 'offline'),
+      hubId: this.hubId,
+      myId: this.myId,
+      peerCount: this.connections.size,
+      lastError: this.lastError
+        ? String(this.lastError.type || this.lastError.message || this.lastError)
+        : null,
+      changedAt: this.lastStateAt
+    };
+  };
+
+  PeernetSharedCore.prototype.transition = function (state, detail) {
+    detail = detail || {};
+    this.state = state;
+    this.lastStateAt = now();
+    if (detail.error) this.lastError = detail.error;
+    if (detail.connected) this.lastError = null;
+    var health = this.health();
+    this.emit('status', {
+      state: state,
+      connected: health.connected,
+      text: detail.text || state,
+      warning: !!detail.warning,
+      health: health
+    });
+    this.emit('health', health);
+    return health;
+  };
+
+  PeernetSharedCore.prototype.off = function (event, fn) {
+    if (!this.listeners[event]) return this;
+    this.listeners[event] = this.listeners[event].filter(function (listener) { return listener !== fn; });
+    if (!this.listeners[event].length) delete this.listeners[event];
     return this;
   };
 
@@ -49,22 +92,34 @@
   PeernetSharedCore.prototype.start = function () {
     var self = this;
     if (!this.Peer) {
+      this.transition('offline', { text: 'PeerJS global not found', warning: true });
       this.emit('error', { type: 'missing-peerjs', message: 'PeerJS global not found' });
-      return;
+      return false;
     }
-    if (this.started) return;
+    if (this.started) return true;
     this.started = true;
+    this.transition('connecting', { text: 'Connecting to Peernet' });
     this.peer = new this.Peer({ debug: 0 });
     this.peer.on('open', function (id) {
       self.myId = id;
+      self.transition('joining', { text: 'Joining shared hub' });
       self.emit('open', { id: id, username: self.username });
       self.setupIncoming(self.peer);
       self.joinHub();
     });
     this.peer.on('error', function (err) {
       if (err && err.type === 'peer-unavailable' && self.tryingHub) self.becomeHub();
-      else self.emit('error', err || { type: 'unknown' });
+      else {
+        self.lastError = err || { type: 'unknown' };
+        self.transition('offline', {
+          text: 'Peer warning: ' + (self.lastError.type || self.lastError.message || 'unknown'),
+          warning: true,
+          error: self.lastError
+        });
+        self.emit('error', self.lastError);
+      }
     });
+    return true;
   };
 
   PeernetSharedCore.prototype.stop = function () {
@@ -74,6 +129,9 @@
     this.peer = null;
     this.myId = null;
     this.started = false;
+    this.tryingHub = false;
+    this.isHub = false;
+    this.transition('stopped', { text: 'Peernet stopped' });
     this.emit('close', {});
   };
 
@@ -99,6 +157,7 @@
     if (meta && meta.username) entry.username = meta.username;
     if (meta && meta.color) entry.color = meta.color;
     this.connections.set(conn.peer, entry);
+    this.emit('health', this.health());
 
     conn.on('data', function (data) { self.handleData(conn.peer, data || {}); });
     conn.on('close', function () {
@@ -106,8 +165,13 @@
       if (self.isHub) self.broadcast({ type: 'peer-left', id: conn.peer }, conn.peer);
       self.emit('peer:leave', { id: conn.peer, entry: entry });
       self.emit('peers', self.peerList());
+      self.emit('health', self.health());
     });
-    conn.on('error', function (err) { self.emit('connection:error', { id: conn.peer, error: err }); });
+    conn.on('error', function (err) {
+      self.lastError = err;
+      self.emit('connection:error', { id: conn.peer, error: err });
+      self.emit('health', self.health());
+    });
     return entry;
   };
 
@@ -127,12 +191,14 @@
     var self = this;
     if (!this.peer || this.peer.destroyed) return;
     this.tryingHub = true;
+    this.transition('joining', { text: 'Joining shared hub' });
     var conn = this.peer.connect(this.hubId, { reliable: true });
     conn.on('open', function () {
       self.tryingHub = false;
       self.isHub = false;
       self.registerConn(conn, { username: 'Lobby Hub', color: '#666' });
       conn.send({ type: 'join', username: self.username, color: self.color });
+      self.transition('connected', { connected: true, text: 'Connected to shared hub' });
       self.emit('hub:join', { id: self.hubId });
     });
   };
@@ -140,15 +206,25 @@
   PeernetSharedCore.prototype.becomeHub = function () {
     var self = this;
     this.tryingHub = false;
+    this.transition('connecting', { text: 'Claiming shared hub' });
     if (this.peer && !this.peer.destroyed) this.peer.destroy();
     this.peer = new this.Peer(this.hubId, { debug: 0 });
     this.peer.on('open', function (id) {
       self.myId = id;
       self.isHub = true;
       self.setupIncoming(self.peer);
+      self.transition('hosting', { connected: true, text: 'Hosting shared hub' });
       self.emit('hub:ready', { id: id });
     });
-    this.peer.on('error', function (err) { self.emit('error', err); });
+    this.peer.on('error', function (err) {
+      self.lastError = err;
+      self.transition('offline', {
+        text: 'Hub error: ' + (err.type || err.message || 'unknown'),
+        warning: true,
+        error: err
+      });
+      self.emit('error', err);
+    });
   };
 
   PeernetSharedCore.prototype.connectPeer = function (peerId, meta) {
@@ -192,6 +268,7 @@
         this.connections.delete(data.id);
         this.emit('peer:leave', { id: data.id });
         this.emit('peers', this.peerList());
+        this.emit('health', this.health());
         break;
       case 'hello':
       case 'identity':
@@ -227,4 +304,4 @@
   };
 
   global.PeernetSharedCore = PeernetSharedCore;
-})(window);
+})(typeof window !== 'undefined' ? window : globalThis);

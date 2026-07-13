@@ -105,6 +105,10 @@ class V11PeerDAW {
     this._renderScheduled = false;
     this._transportStep = 0;
     this._transportStartTime = 0;
+    this.commandCenterIndex = 0;
+    this.commandCenterMatches = [];
+    this.commandCenterReturnFocus = null;
+    this.peernetHealth = null;
     this.sampleLibrary = new SampleLibrary();
     this.pendingSampleUploadSlotId = null;
     this.sampleSyncProgress = new Map();
@@ -126,6 +130,7 @@ class V11PeerDAW {
     this.createStarfield();
     this.bindExampleProjects();
     this.bindChrome();
+    this.bindCommandCenter();
     this.bindModuleSearch();
     this.bindTransportBar();
     this.patchBay.addEventListener('packet', (e) => this.logPacket(e.detail));
@@ -416,6 +421,306 @@ class V11PeerDAW {
         this.logText(`sample library JSON parse error: ${error.message}`);
       }
     });
+  }
+
+  commandSearchScore(entry, query = '') {
+    const normalized = String(query).trim().toLowerCase();
+    if (!normalized) return entry.priority || 0;
+    const terms = normalized.split(/\s+/).filter(Boolean);
+    const title = entry.title.toLowerCase();
+    const haystack = `${entry.title} ${entry.detail || ''} ${entry.keywords || ''}`.toLowerCase();
+    if (!terms.every((term) => haystack.includes(term))) return -1;
+    let score = terms.reduce(
+      (total, term) => total + (title.startsWith(term) ? 32 : title.includes(term) ? 18 : 7),
+      0
+    );
+    if (title === normalized) score += 80;
+    return score + (entry.priority || 0);
+  }
+
+  commandCenterEntries() {
+    const workspaceViews = [
+      [
+        'session',
+        'Session Dashboard',
+        'Shared-session state, participants, rig, and network health',
+      ],
+      ['chains', 'Signal Flow', 'Inspect derived module chains and routing'],
+      ['clips', 'Clip Launcher', 'Create, launch, stop, and place clips'],
+      ['samples', 'Sample Library', 'Assign and repair project samples'],
+      ['arrangement', 'Arrangement', 'Edit the timeline and clip regions'],
+      ['mixer', 'Mixer', 'Open channel, bus, pan, mute, and level controls'],
+      ['module', 'Focused Module', 'Open the full editor for the selected module'],
+    ].map(([view, title, detail], index) => ({
+      id: `view:${view}`,
+      title: `Open ${title}`,
+      detail,
+      kind: 'view',
+      keywords: `${view} workspace tab navigate`,
+      priority: 30 - index,
+      run: () => this.setWorkspaceView(view),
+    }));
+
+    const actions = [
+      {
+        id: 'transport:boot',
+        title: 'Boot Audio Engine',
+        detail: 'Initialize Web Audio and start all audio-capable modules',
+        kind: 'transport',
+        keywords: 'audio engine initialize resume',
+        priority: 22,
+        run: () => document.querySelector('#btnBootAudio')?.click(),
+      },
+      {
+        id: 'transport:start',
+        title: 'Start Clock',
+        detail: 'Start playback and transport timing',
+        kind: 'transport',
+        keywords: 'play transport clock space',
+        priority: 21,
+        run: () => document.querySelector('#btnStart')?.click(),
+      },
+      {
+        id: 'transport:stop',
+        title: 'Stop Clock',
+        detail: 'Stop playback immediately',
+        kind: 'transport',
+        keywords: 'stop transport clock',
+        priority: 20,
+        run: () => document.querySelector('#btnStop')?.click(),
+      },
+      {
+        id: 'peer:connect',
+        title: 'Reconnect Shared Studio',
+        detail: 'Restart the Peernet session while preserving the current project',
+        kind: 'network',
+        keywords: 'peer reconnect retry health session',
+        priority: 18,
+        run: () => this.bootstrapDefaultPeernetSession({ force: true }),
+      },
+      {
+        id: 'session:create',
+        title: 'Create Session',
+        detail: 'Create a named collaboration session from the current rig',
+        kind: 'session',
+        keywords: 'room collaborate share code',
+        priority: 15,
+        run: () => document.querySelector('#btnCreateSession')?.click(),
+      },
+      {
+        id: 'project:snapshot',
+        title: 'Save Project Snapshot',
+        detail: 'Capture the current rig into local Peernet storage',
+        kind: 'project',
+        keywords: 'save snapshot backup storage',
+        priority: 14,
+        run: () => document.querySelector('#btnSaveSnapshot')?.click(),
+      },
+      {
+        id: 'module:focus-search',
+        title: 'Focus Module Filter',
+        detail: 'Filter the module catalog in the left sidebar',
+        kind: 'navigate',
+        keywords: 'find add module search sidebar',
+        priority: 12,
+        run: () => document.querySelector('#moduleSearch')?.focus(),
+      },
+    ];
+
+    const moduleSelect = document.querySelector('#addModule');
+    const modules = [
+      ...(moduleSelect?.querySelectorAll('option[value]:not([value=""])') || []),
+    ].map((option) => ({
+      id: `module:add:${option.value}`,
+      title: `Add ${option.textContent.trim()}`,
+      detail: `Create and auto-patch a ${option.parentElement?.label || 'module'}`,
+      kind: 'module',
+      keywords: `${option.value} ${option.parentElement?.label || ''} instrument effect sequencer`,
+      priority: 5,
+      run: () => {
+        moduleSelect.value = option.value;
+        moduleSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      },
+    }));
+
+    const examples = peerDawExampleProjects.map((example) => ({
+      id: `example:${example.id}`,
+      title: `Load ${example.title}`,
+      detail: example.description || 'Replace the current rig with this tutorial project',
+      kind: 'example',
+      keywords: `${example.id} tutorial demo project`,
+      priority: 4,
+      run: () => this.loadExampleProject(example.id),
+    }));
+
+    return [...workspaceViews, ...actions, ...modules, ...examples];
+  }
+
+  setCommandCenterIndex(index) {
+    const results = document.querySelector('#commandCenterResults');
+    if (!this.commandCenterMatches.length) {
+      this.commandCenterIndex = 0;
+      return;
+    }
+    this.commandCenterIndex =
+      (index + this.commandCenterMatches.length) % this.commandCenterMatches.length;
+    results?.querySelectorAll('[data-command-index]').forEach((node) => {
+      const active = Number(node.dataset.commandIndex) === this.commandCenterIndex;
+      node.classList.toggle('active', active);
+      node.setAttribute('aria-selected', String(active));
+      if (active) {
+        document
+          .querySelector('#commandCenterInput')
+          ?.setAttribute('aria-activedescendant', node.id);
+        node.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  renderCommandCenter() {
+    const input = document.querySelector('#commandCenterInput');
+    const results = document.querySelector('#commandCenterResults');
+    if (!input || !results) return;
+    this.commandCenterMatches = this.commandCenterEntries()
+      .map((entry) => ({ entry, score: this.commandSearchScore(entry, input.value) }))
+      .filter(({ score }) => score >= 0)
+      .sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title))
+      .slice(0, 20)
+      .map(({ entry }) => entry);
+    this.commandCenterIndex = Math.min(
+      this.commandCenterIndex,
+      Math.max(0, this.commandCenterMatches.length - 1)
+    );
+    results.innerHTML = this.commandCenterMatches.length
+      ? this.commandCenterMatches
+          .map(
+            (entry, index) =>
+              `<button id="daw-command-option-${index}" class="command-center-result ${index === this.commandCenterIndex ? 'active' : ''}" type="button" role="option" aria-selected="${index === this.commandCenterIndex}" data-command-index="${index}"><span class="command-center-result-main"><strong class="command-center-result-title">${this.escapeHtml(entry.title)}</strong><span class="command-center-result-detail">${this.escapeHtml(entry.detail || entry.keywords || '')}</span></span><span class="command-center-result-kind">${this.escapeHtml(entry.kind)}</span></button>`
+          )
+          .join('')
+      : '<div class="command-center-empty">No matching DAW command.</div>';
+    results.querySelectorAll('[data-command-index]').forEach((node) => {
+      node.addEventListener('pointerenter', () =>
+        this.setCommandCenterIndex(Number(node.dataset.commandIndex))
+      );
+      node.addEventListener('click', () =>
+        this.runCommandCenterEntry(Number(node.dataset.commandIndex))
+      );
+    });
+    this.setCommandCenterIndex(this.commandCenterIndex);
+  }
+
+  renderPeernetHealth(health = this.peernet.health()) {
+    this.peernetHealth = health || this.peernet.health();
+    const state = this.peernetHealth?.state || 'idle';
+    const role = this.peernetHealth?.role || 'offline';
+    const peerCount = Number(this.peernetHealth?.peerCount || 0);
+    const text = `peer: ${state} · ${role} · ${peerCount}`;
+    for (const selector of ['#peerStatus', '#commandCenterHealth']) {
+      const node = document.querySelector(selector);
+      if (!node) continue;
+      node.textContent = text;
+      node.dataset.state = state;
+      node.title = this.peernetHealth?.lastError
+        ? `last error: ${this.peernetHealth.lastError}`
+        : `hub ${this.peernetHealth?.hubId || this.defaultSessionCode}`;
+    }
+    if (this.workspaceView === 'session') this.scheduleRender();
+  }
+
+  openCommandCenter(initialQuery = '') {
+    const center = document.querySelector('#commandCenter');
+    const input = document.querySelector('#commandCenterInput');
+    if (!center || !input) return;
+    this.commandCenterReturnFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : document.querySelector('#btnCommandCenter');
+    center.classList.add('open');
+    center.setAttribute('aria-hidden', 'false');
+    input.value = initialQuery;
+    this.commandCenterIndex = 0;
+    this.renderPeernetHealth();
+    this.renderCommandCenter();
+    input.focus({ preventScroll: true });
+  }
+
+  closeCommandCenter() {
+    const center = document.querySelector('#commandCenter');
+    if (!center?.classList.contains('open')) return;
+    center.classList.remove('open');
+    center.setAttribute('aria-hidden', 'true');
+    document.querySelector('#commandCenterInput')?.removeAttribute('aria-activedescendant');
+    this.commandCenterReturnFocus?.focus?.();
+    this.commandCenterReturnFocus = null;
+  }
+
+  async runCommandCenterEntry(index = this.commandCenterIndex) {
+    const entry = this.commandCenterMatches[index];
+    if (!entry) return;
+    this.closeCommandCenter();
+    try {
+      await entry.run?.();
+      this.logText(`command: ${entry.title}`);
+    } catch (error) {
+      this.logText(`command failed: ${entry.title} · ${error.message}`);
+    }
+  }
+
+  bindCommandCenter() {
+    const center = document.querySelector('#commandCenter');
+    const input = document.querySelector('#commandCenterInput');
+    document
+      .querySelector('#btnCommandCenter')
+      ?.addEventListener('click', () => this.openCommandCenter());
+    center
+      ?.querySelectorAll('[data-command-close]')
+      .forEach((node) => node.addEventListener('click', () => this.closeCommandCenter()));
+    input?.addEventListener('input', () => {
+      this.commandCenterIndex = 0;
+      this.renderCommandCenter();
+    });
+    input?.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.setCommandCenterIndex(this.commandCenterIndex + 1);
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.setCommandCenterIndex(this.commandCenterIndex - 1);
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.runCommandCenterEntry();
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeCommandCenter();
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Tab' && center?.classList.contains('open')) {
+        const focusable = [
+          ...center.querySelectorAll("input, button, [href], [tabindex]:not([tabindex='-1'])"),
+        ].filter((node) => !node.disabled && node.offsetParent !== null);
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        center?.classList.contains('open') ? this.closeCommandCenter() : this.openCommandCenter();
+        return;
+      }
+      if (event.key === 'Escape') this.closeCommandCenter();
+    });
+    this.renderPeernetHealth();
   }
 
   bindModuleSearch() {
@@ -766,7 +1071,7 @@ class V11PeerDAW {
       );
     }
     if (data.gridKind === 'sequencer') {
-      const _row = module.rows?.find((candidate) => candidate.id === data.rowId);
+      const row = module.rows?.find((candidate) => candidate.id === data.rowId);
       return Boolean(row?.steps?.[Number(data.stepIndex)]?.enabled);
     }
     if (data.gridKind === 'ocra')
@@ -809,7 +1114,6 @@ class V11PeerDAW {
       return;
     }
     if (data.gridKind === 'sequencer') {
-      const _row = module.rows?.find((candidate) => candidate.id === data.rowId);
       const stepIndex = Number(data.stepIndex);
       const templateRow =
         source?.gridKind === 'sequencer'
@@ -1929,6 +2233,12 @@ class V11PeerDAW {
   }
 
   handleModuleAction(action, target) {
+    if (action === 'peer-reconnect') {
+      this.bootstrapDefaultPeernetSession({ force: true }).catch((error) =>
+        this.logText(`peer reconnect failed: ${error.message}`)
+      );
+      return;
+    }
     if (action === 'unsolo-all') {
       for (const channel of Object.values(this.mixerState.channels)) {
         channel.solo = false;
@@ -2485,7 +2795,8 @@ class V11PeerDAW {
       const chains = this.detectSignalChains();
       const assigned = new Set(chains.flat());
       const unpatched = modules.filter((module) => !assigned.has(module.id)).length;
-      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
+      const health = this.peernetHealth || this.peernet.health();
+      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Network health</strong><span class="big-number">${this.escapeHtml(health.state || 'idle')}</span><p class="microcopy">role ${this.escapeHtml(health.role || 'offline')} · ${this.escapeHtml(health.peerCount || 0)} direct peers · ${health.lastError ? `last error ${this.escapeHtml(health.lastError)}` : 'transport healthy'}</p><button type="button" data-module-action="peer-reconnect">Reconnect</button></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
       return;
     }
     if (view === 'samples') {
@@ -2585,12 +2896,14 @@ class V11PeerDAW {
     const pilotEl = document.querySelector('#pilotName');
     if (pilotEl) pilotEl.value = username;
     this.subLobby.setUsername(username);
-    this.peernet.start({
+    const profile = {
       username,
       targetPeerId: this.targetPeerId,
       spectate: this.spectateMode,
       sessionCode: this.defaultSessionCode,
-    });
+    };
+    if (force && this.peernet.started) this.peernet.reconnect(profile);
+    else this.peernet.start(profile);
     const session = this.peernet.ensureSharedSession({
       id: 'v11-peer-daw:open-studio',
       code: this.defaultSessionCode,
@@ -2969,8 +3282,10 @@ class V11PeerDAW {
     this.subLobby.on('data', ({ from, data }) => this.handleSubLobbySampleData(from, data));
 
     this.peernet.addEventListener('status', (e) => {
-      document.querySelector('#peerStatus').textContent = e.detail.text;
+      const health = e.detail.health || this.peernet.health();
+      this.renderPeernetHealth(health);
     });
+    this.peernet.addEventListener('health', (e) => this.renderPeernetHealth(e.detail));
     this.peernet.addEventListener('presence', (e) => {
       this.peerList = e.detail;
       document.querySelector('#peerCount').textContent = `${e.detail.length} peers`;

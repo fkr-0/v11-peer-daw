@@ -26,8 +26,9 @@
         </div>
       </div>
       <nav class="transport">
-        <span id="audioStatus" class="status-indicator">audio: cold</span>
-        <span id="peerStatus" class="status-indicator">peer: offline</span>
+        <span id="audioStatus" class="status-indicator" aria-live="polite">audio: cold</span>
+        <span id="peerStatus" class="status-indicator" data-state="idle" aria-live="polite">peer: idle</span>
+        <button id="btnCommandCenter" class="btn-command" type="button" aria-haspopup="dialog" aria-controls="commandCenter">COMMAND <kbd>Ctrl K</kbd></button>
         <button id="btnBootAudio" class="btn-primary">BOOT AUDIO</button>
         <button id="btnStart">START CLOCK</button>
         <button id="btnStop" class="btn-danger">STOP</button>
@@ -227,6 +228,25 @@
       <a class="transport-docs" href="./docs/ARCHITECTURE.md">docs</a>
     </footer>
   </main>
+
+  <div id="commandCenter" class="command-center" role="dialog" aria-modal="true" aria-labelledby="commandCenterTitle" aria-hidden="true">
+    <div class="command-center-backdrop" data-command-close></div>
+    <section class="command-center-dialog">
+      <header class="command-center-header">
+        <div>
+          <h2 id="commandCenterTitle">DAW command center</h2>
+          <p>Open views, add modules, control transport, and load projects.</p>
+        </div>
+        <span id="commandCenterHealth" class="status-indicator" data-state="idle">peer: idle</span>
+      </header>
+      <input id="commandCenterInput" class="command-center-input" type="search" placeholder="Search modules, views, examples, and actions…" autocomplete="off" aria-label="Command search" aria-controls="commandCenterResults">
+      <div id="commandCenterResults" class="command-center-results" role="listbox" aria-label="DAW commands"></div>
+      <footer class="command-center-footer">
+        <span><kbd>↑</kbd> <kbd>↓</kbd> select · <kbd>Enter</kbd> run · <kbd>Esc</kbd> close</span>
+        <button type="button" data-command-close>CLOSE</button>
+      </footer>
+    </section>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <script type="module" src="./vendor/peernet/peernet-shared-core.js"></script>
