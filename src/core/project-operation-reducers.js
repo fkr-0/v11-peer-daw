@@ -10,6 +10,51 @@ function findModule(project, moduleId) {
   return project?.modules?.find?.((module) => module.id === moduleId) || null;
 }
 
+export function recordAppliedOperation(context = {}, operation = {}) {
+  const fieldVersions = context.fieldVersions || new Map();
+  const tombstones = context.tombstones || new Map();
+  context.fieldVersions = fieldVersions;
+  context.tombstones = tombstones;
+  if (operation.domain === OPERATION_DOMAINS.BATCH) {
+    for (const [index, nested] of (operation.payload?.operations || []).entries()) {
+      recordAppliedOperation(context, {
+        ...nested,
+        opId: nested.opId || `${operation.opId}.${index + 1}`,
+        actorId: nested.actorId || operation.actorId,
+        sequence: nested.sequence || operation.sequence,
+        lamport: nested.lamport || operation.lamport,
+        baseRevision: nested.baseRevision ?? operation.baseRevision,
+      });
+    }
+    return context;
+  }
+  if (
+    operation.action === 'set' ||
+    operation.action === 'update' ||
+    operation.action === 'launch' ||
+    operation.action === 'stop' ||
+    operation.action === 'set-bpm' ||
+    operation.action === 'unsolo-all'
+  ) {
+    fieldVersions.set(operationFieldKey(operation), operationClock(operation));
+  }
+  if (operation.action === 'delete') {
+    const target = operation.target || {};
+    const tombstoneKey =
+      operation.domain === OPERATION_DOMAINS.NOTE
+        ? `note:${target.moduleId}:${target.noteId}`
+        : operation.domain === OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT
+          ? `placement:${target.placementId}`
+          : operation.domain === OPERATION_DOMAINS.MULTISAMPLER_ZONE
+            ? `zone:${target.moduleId}:${target.zoneId}`
+            : operation.domain === OPERATION_DOMAINS.CLIP_SLOT
+              ? `slot:${target.slotId}`
+              : '';
+    if (tombstoneKey) tombstones.set(tombstoneKey, operationClock(operation));
+  }
+  return context;
+}
+
 function setPath(target, path, value) {
   const parts = String(path || '').split('.').filter(Boolean);
   if (!parts.length) return false;
@@ -107,6 +152,10 @@ function applySingle(project, operation, context) {
     module.notes ||= [];
     const index = module.notes.findIndex((note) => note.id === target.noteId);
     if (operation.action === 'add') {
+      const tombstone = context.tombstones.get(`note:${target.moduleId}:${target.noteId}`);
+      if (tombstone && compareOperationClock(operation, tombstone) <= 0)
+        return duplicate('note-tombstoned');
+      context.tombstones.delete(`note:${target.moduleId}:${target.noteId}`);
       if (index >= 0) return duplicate('note-exists');
       module.notes.push(structuredCloneSafe(payload.note));
       module.notes.sort((a, b) => Number(a.beat || 0) - Number(b.beat || 0) || String(a.note || '').localeCompare(String(b.note || '')));
@@ -125,18 +174,40 @@ function applySingle(project, operation, context) {
   } else if (operation.domain === OPERATION_DOMAINS.SEQUENCER_STEP) {
     const module = findModule(project, target.moduleId);
     if (!module) return reject('sequencer-module-missing');
-    module.steps ||= [];
-    const index = module.steps.findIndex((step) => step.id === target.stepId);
-    if (operation.action === 'clear') {
-      if (index < 0) return duplicate('step-absent');
-      module.steps.splice(index, 1);
-    } else if (index >= 0) Object.assign(module.steps[index], structuredCloneSafe(payload.patch || {}));
-    else module.steps.push(structuredCloneSafe(payload.step));
-    changedPaths.push(`modules.${target.moduleId}.steps.${target.stepId}`);
+    if (Array.isArray(module.rows) && target.rowId !== undefined) {
+      const row = module.rows.find((candidate) => candidate.id === target.rowId);
+      if (!row) return needsSnapshot('sequencer-row-missing');
+      row.steps ||= [];
+      const stepIndex = Number(target.stepIndex);
+      if (!Number.isInteger(stepIndex) || stepIndex < 0) return reject('sequencer-step-index');
+      row.steps[stepIndex] ||= {
+        enabled: false,
+        velocity: 0.8,
+        microTiming: 0,
+        duration: 0.5,
+      };
+      if (!scalar().allowed) return duplicate('stale-field-clock');
+      if (operation.action === 'clear') row.steps[stepIndex].enabled = false;
+      else Object.assign(row.steps[stepIndex], structuredCloneSafe(payload.patch || payload.step || {}));
+      changedPaths.push(`modules.${target.moduleId}.rows.${target.rowId}.steps.${stepIndex}`);
+    } else {
+      module.steps ||= [];
+      const index = module.steps.findIndex((step) => step.id === target.stepId);
+      if (operation.action === 'clear') {
+        if (index < 0) return duplicate('step-absent');
+        module.steps.splice(index, 1);
+      } else if (index >= 0) Object.assign(module.steps[index], structuredCloneSafe(payload.patch || {}));
+      else module.steps.push(structuredCloneSafe(payload.step));
+      changedPaths.push(`modules.${target.moduleId}.steps.${target.stepId}`);
+    }
   } else if (operation.domain === OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT) {
     const placements = project.arrangement.clips;
     const index = placements.findIndex((placement) => placement.placementId === target.placementId);
     if (operation.action === 'add') {
+      const tombstone = context.tombstones.get(`placement:${target.placementId}`);
+      if (tombstone && compareOperationClock(operation, tombstone) <= 0)
+        return duplicate('placement-tombstoned');
+      context.tombstones.delete(`placement:${target.placementId}`);
       if (index >= 0) return duplicate('placement-exists');
       placements.push(structuredCloneSafe(payload.placement));
     } else if (operation.action === 'delete') {
@@ -160,9 +231,17 @@ function applySingle(project, operation, context) {
     module.zones ||= [];
     const index = module.zones.findIndex((zone) => zone.id === target.zoneId);
     if (operation.action === 'add') {
+      const tombstone = context.tombstones.get(`zone:${target.moduleId}:${target.zoneId}`);
+      if (tombstone && compareOperationClock(operation, tombstone) <= 0)
+        return duplicate('zone-tombstoned');
+      context.tombstones.delete(`zone:${target.moduleId}:${target.zoneId}`);
       if (index >= 0) return duplicate('zone-exists');
       module.zones.push(structuredCloneSafe(payload.zone));
     } else if (operation.action === 'delete') {
+      context.tombstones.set(
+        `zone:${target.moduleId}:${target.zoneId}`,
+        operationClock(operation)
+      );
       if (index < 0) return duplicate('zone-absent');
       module.zones.splice(index, 1);
     } else {

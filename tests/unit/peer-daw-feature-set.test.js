@@ -204,6 +204,30 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(app).toContain('workspaceViewMetadata');
   });
 
+  test('collaboration confidence exposes protocol v2 operations and Sync Center recovery UI', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    for (const id of ['btnSyncCenter', 'btnOpenSyncCenter', 'syncCenter']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    for (const marker of [
+      'data-sync-overview',
+      'data-sync-pending',
+      'data-sync-activity',
+      'data-sync-conflicts',
+      'data-sync-action="retry"',
+      'data-sync-action="snapshot"',
+      'data-sync-action="export"',
+    ]) {
+      expect(html).toContain(marker);
+    }
+    expect(app).toContain('new CollaborationEngine');
+    expect(app).toContain('publishCollaborativeOperation');
+    expect(app).toContain('applyCollaborationOperation');
+    expect(app).toContain("id: 'collaboration:sync-center'");
+  });
+
   test('project level exposes missing-sample and sample-library panels', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 
@@ -484,8 +508,20 @@ describe('multisampler module', () => {
     expect(source.playbackRate.value).toBeCloseTo(1);
     expect(source.started[0]).toEqual([1.015, 4, 1.96]);
     expect(sampler.serialize().zones).toEqual([
-      { name: 'bass.wav', rootNote: 'C2', minNote: 'C1', maxNote: 'B2' },
-      { name: 'lead.wav', rootNote: 'C5', minNote: 'C3', maxNote: 'C7' },
+      expect.objectContaining({
+        id: expect.stringMatching(/^zone-/),
+        name: 'bass.wav',
+        rootNote: 'C2',
+        minNote: 'C1',
+        maxNote: 'B2',
+      }),
+      expect.objectContaining({
+        id: expect.stringMatching(/^zone-/),
+        name: 'lead.wav',
+        rootNote: 'C5',
+        minNote: 'C3',
+        maxNote: 'C7',
+      }),
     ]);
   });
 });

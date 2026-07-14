@@ -1,6 +1,9 @@
 import { describe, expect, test } from '@jest/globals';
 import { OperationClock, OPERATION_DOMAINS } from '../../src/core/project-operations.js';
-import { applyProjectOperation } from '../../src/core/project-operation-reducers.js';
+import {
+  applyProjectOperation,
+  recordAppliedOperation,
+} from '../../src/core/project-operation-reducers.js';
 
 function project() {
   return {
@@ -8,6 +11,16 @@ function project() {
     modules: [
       { id: 'synth', kind: 'synth', cutoff: 1000, notes: [] },
       { id: 'clock', kind: 'clock', bpm: 120 },
+      {
+        id: 'seq',
+        kind: 'midi-generator',
+        rows: [
+          {
+            id: 'row-1',
+            steps: [{ enabled: false, velocity: 0.8, microTiming: 0, duration: 0.5 }],
+          },
+        ],
+      },
     ],
     mixer: { masterVolume: 0.8, channels: { synth: { gain: 0.8, pan: 0, muted: false, solo: false } } },
     clips: { currentBeat: 0, slots: [{ id: 'slot-1', launchBeat: null, stopBeat: null }] },
@@ -92,5 +105,53 @@ describe('project operation reducers', () => {
     const added = applyProjectOperation(project(), add, context);
     const moved = applyProjectOperation(added.project, move, context);
     expect(moved.project.arrangement.clips[0]).toMatchObject({ placementId: 'place-1', startBeat: 12 });
+  });
+
+  test('updates row-addressed sequencer steps without flattening module state', () => {
+    const operation = new OperationClock({ actorId: 'alpha' }).create(
+      OPERATION_DOMAINS.SEQUENCER_STEP,
+      'set',
+      {
+        moduleId: 'seq',
+        rowId: 'row-1',
+        stepIndex: 0,
+        stepId: 'row-1:0',
+        field: 'velocity',
+      },
+      { patch: { enabled: true, velocity: 0.55 } }
+    );
+    const result = applyProjectOperation(project(), operation, {
+      fieldVersions: new Map(),
+      tombstones: new Map(),
+    });
+
+    expect(result.status).toBe('applied');
+    expect(result.project.modules.find((module) => module.id === 'seq').rows[0].steps[0]).toMatchObject({
+      enabled: true,
+      velocity: 0.55,
+    });
+  });
+
+  test('records local clocks and prevents older remote resurrection after delete', () => {
+    const localClock = new OperationClock({ actorId: 'zeta', lamport: 10 });
+    const remoteClock = new OperationClock({ actorId: 'alpha', lamport: 2 });
+    const context = { fieldVersions: new Map(), tombstones: new Map() };
+    const localDelete = localClock.create(
+      OPERATION_DOMAINS.NOTE,
+      'delete',
+      { moduleId: 'synth', noteId: 'note-x' },
+      {}
+    );
+    recordAppliedOperation(context, localDelete);
+    const remoteAdd = remoteClock.create(
+      OPERATION_DOMAINS.NOTE,
+      'add',
+      { moduleId: 'synth', noteId: 'note-x' },
+      { note: { id: 'note-x', beat: 0, note: 'C4', velocity: 0.8, duration: 1 } }
+    );
+    const result = applyProjectOperation(project(), remoteAdd, context);
+
+    expect(result.status).toBe('duplicate');
+    expect(result.reason).toBe('note-tombstoned');
   });
 });

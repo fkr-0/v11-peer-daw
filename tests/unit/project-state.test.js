@@ -1,6 +1,7 @@
 import { describe, expect, test } from '@jest/globals';
 import {
   createProjectSource,
+  normalizeProjectStableIds,
   serializeClipState,
   serializeMixerState,
   serializeRig,
@@ -100,5 +101,39 @@ describe('project state serialization helpers', () => {
       graph: { nodes: [{ id: 'sampler-a' }], edges: [], chains: [] },
       canvasPositions: { 'sampler-a': { x: 12, y: 34 } },
     });
+  });
+
+  test('adds deterministic stable ids to legacy project entities without mutating input', () => {
+    const legacy = {
+      modules: [
+        {
+          id: 'roll',
+          notes: [{ beat: 0, note: 'C4' }],
+          zones: [{ name: 'zone a', rootNote: 'C4' }],
+        },
+      ],
+      clips: { slots: [{ name: 'slot a' }] },
+      arrangement: {
+        clips: [
+          {
+            clip: { id: 'clip-a', name: 'Clip A' },
+            trackId: 'roll',
+            startBeat: 4,
+          },
+        ],
+      },
+    };
+
+    const normalized = normalizeProjectStableIds(legacy);
+    const repeated = normalizeProjectStableIds(legacy);
+
+    expect(normalized.clips.slots[0].id).toBe('legacy-slot-1');
+    expect(normalized.arrangement.clips[0].placementId).toBe(
+      'legacy-placement-1-clip-a-roll-4'
+    );
+    expect(normalized.modules[0].notes[0].id).toBe('roll-note-1');
+    expect(normalized.modules[0].zones[0].id).toBe('roll-zone-1');
+    expect(repeated).toEqual(normalized);
+    expect(legacy.clips.slots[0].id).toBeUndefined();
   });
 });

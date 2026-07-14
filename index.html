@@ -28,6 +28,7 @@
       <nav class="transport">
         <span id="audioStatus" class="status-indicator" aria-live="polite">audio: cold</span>
         <span id="peerStatus" class="status-indicator" data-state="idle" aria-live="polite">peer: idle</span>
+        <button id="btnSyncCenter" class="sync-status-button" type="button" data-state="starting" aria-haspopup="dialog" aria-controls="syncCenter">SYNC STARTING</button>
         <div class="layout-controls" role="group" aria-label="Workspace panel visibility">
           <button id="btnToggleLeftPanel" class="btn-layout" type="button" aria-pressed="true" title="Toggle setup panel (Ctrl Shift L)">LEFT</button>
           <button id="btnFocusMode" class="btn-layout" type="button" aria-pressed="false" title="Focus the central workspace (Ctrl Shift F)">FOCUS</button>
@@ -123,6 +124,7 @@
           <p class="microcopy"><span id="peerCount">0 peers</span> · <span id="storageStatus">storage ready</span></p>
           <p id="sessionHealthSummary" class="session-health-summary" aria-live="polite">network starting…</p>
           <p id="projectSyncSummary" class="project-sync-summary" aria-live="polite">project sync: starting…</p>
+          <button id="btnOpenSyncCenter" class="sync-center-open" type="button" aria-haspopup="dialog" aria-controls="syncCenter">OPEN SYNC CENTER</button>
           <p class="microcopy"><strong id="subLobbyStatus">sub-lobby: offline</strong></p>
           <label class="microcopy inline-check"><input id="blockIncomingJoin" type="checkbox"> block auto-join</label>
           <div class="button-row sub-lobby-actions">
@@ -304,6 +306,49 @@
         <span><kbd>↑</kbd> <kbd>↓</kbd> select · <kbd>Enter</kbd> run · <kbd>Esc</kbd> close</span>
         <button type="button" data-command-close>CLOSE</button>
       </footer>
+    </section>
+  </div>
+
+  <div id="syncCenter" class="sync-center" role="dialog" aria-modal="true" aria-labelledby="syncCenterTitle" aria-hidden="true">
+    <div class="sync-center-backdrop" data-sync-close></div>
+    <section class="sync-center-dialog">
+      <header class="sync-center-header">
+        <div>
+          <span class="workspace-eyebrow">Collaboration</span>
+          <h2 id="syncCenterTitle">Sync Center</h2>
+          <p>Delivery, acknowledgements, conflicts, compatibility, and recovery.</p>
+        </div>
+        <div class="sync-center-header-actions">
+          <span class="sync-center-state" data-sync-state>SYNCED</span>
+          <button type="button" data-sync-close>CLOSE</button>
+        </div>
+      </header>
+      <div class="sync-center-scroll">
+        <section class="sync-section">
+          <div class="sync-section-heading"><h3>Overview</h3><span data-sync-counts></span></div>
+          <div class="sync-overview-grid" data-sync-overview></div>
+        </section>
+        <section class="sync-section">
+          <div class="sync-section-heading"><h3>Pending delivery</h3><button type="button" data-sync-action="retry">RETRY NOW</button></div>
+          <div class="sync-list" data-sync-pending></div>
+        </section>
+        <section class="sync-section">
+          <div class="sync-section-heading"><h3>Activity</h3></div>
+          <div class="sync-list sync-activity-list" data-sync-activity></div>
+        </section>
+        <section class="sync-section">
+          <div class="sync-section-heading"><h3>Conflicts</h3></div>
+          <div class="sync-list" data-sync-conflicts></div>
+        </section>
+        <section class="sync-section sync-recovery">
+          <div class="sync-section-heading"><h3>Recovery</h3></div>
+          <div class="button-row">
+            <button type="button" data-sync-action="snapshot">REQUEST SNAPSHOT</button>
+            <button type="button" data-sync-action="export">EXPORT JOURNAL</button>
+            <button type="button" data-sync-action="clear">CLEAR ACKNOWLEDGED</button>
+          </div>
+        </section>
+      </div>
     </section>
   </div>
 

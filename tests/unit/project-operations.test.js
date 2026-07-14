@@ -32,6 +32,13 @@ describe('project operations', () => {
     expect(second).toMatchObject({ opId: 'alpha:2', sequence: 2, lamport: 9 });
     expect(validateOperation(first)).toEqual({ valid: true, errors: [] });
     expect(operationFieldKey(first)).toBe('module-parameter:synth:cutoff');
+    const note = clock.create(
+      OPERATION_DOMAINS.NOTE,
+      'update',
+      { moduleId: 'roll', noteId: 'note-3', field: 'velocity' },
+      { patch: { velocity: 0.4 } }
+    );
+    expect(operationFieldKey(note)).toBe('note:note-3:velocity');
   });
 
   test('validates domains/actions and rejects oversized payloads', () => {

@@ -239,6 +239,31 @@ Use `?localSync=false` to disable the BroadcastChannel fallback while testing
 or diagnosing the remote Peernet path. The Session panel shows project revision,
 last transport activity, delivery counts, and acknowledgement state.
 
+### Collaboration Confidence in 1.4
+
+Frequent edits now travel as typed protocol-v2 operations instead of complete
+project replacements. Mixer controls, tempo, module parameters, clip actions,
+notes, sequencer steps, arrangement placements, loops, and multisampler zones
+are applied incrementally and acknowledged by compatible peers.
+
+The transport bar exposes a compact collaboration state. Open **Sync Center**
+to inspect:
+
+- Pending, partially acknowledged, retrying, rejected, and completed edits.
+- Human-readable local and remote activity.
+- Protocol compatibility and connected operation-capable peers.
+- Conflicts requiring manual recovery.
+- Snapshot recovery, immediate retry, journal export, and acknowledged-history cleanup.
+
+Pending operations are persisted per room and browser-tab actor, replay after a
+reload or reconnect, and compact after checkpoints. Duplicate local/Peernet
+delivery is idempotent. Complete snapshots remain available for late joining,
+older clients, structural module/routing changes, project imports, sample
+binary assignment, and recovery.
+
+Protocol details and operation-domain boundaries are documented in
+`docs/COLLABORATION_PROTOCOL.md`.
+
 ## Workspace and Keyboard UX
 
 The central DAW workspace can be adapted without losing project state:

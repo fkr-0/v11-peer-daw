@@ -37,7 +37,7 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Clip, arrangement, mixer, and module views expose serious state instead of placeholder sidebar text.
 - Peer status warnings are rendered instead of crashing when PeerJS transport is unavailable.
 
-## Implemented through 1.3.0
+## Implemented through 1.4.0
 
 - Editable clip slots, launch/stop/place operations, and project persistence.
 - Full piano-roll and pattern editing paths with keyboard/grid operations.
@@ -50,8 +50,25 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Contextual workspace headings, direct keyboard view shortcuts, and accessible arrow-key tab navigation.
 - Inspector drawers with live counts and remembered closed/open state.
 - Toast feedback for important state-changing actions and responsive no-overflow verification.
+- Typed operation collaboration for frequent controls and stable musical entities.
+- Persistent per-room outbox, acknowledgements, retry/backoff, replay, deduplication,
+  checkpoint compaction, and recovery export.
+- Stable IDs and legacy migration for placements, slots, notes, and zones.
+- Sync Center status, activity, pending delivery, conflicts, compatibility, and recovery UI.
+- Incremental remote application that avoids whole-rig rebuilds for covered operations.
 
 ## Next implementation slices
+
+### 1.4.0 release theme: Collaboration Confidence — implemented
+
+- Replace frequent whole-project updates with typed, deterministic operations.
+- Preserve snapshots for bootstrap, compatibility, structural edits, and recovery.
+- Persist pending operations and acknowledgement/retry state per room.
+- Add stable IDs to arrangement placements and other index-addressed musical entities.
+- Add a Sync Center for delivery state, activity, conflicts, and recovery.
+- Apply remote operations without replacing focused editors or workspace context.
+
+Detailed design: `docs/plans/2026-07-14-v1.4.0-collaboration-confidence.md`.
 
 ### Slice 6: operation-level collaboration
 

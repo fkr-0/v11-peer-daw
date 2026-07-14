@@ -65,13 +65,16 @@ export function operationFieldKey(operation = {}) {
   const target = operation.target || {};
   const field = target.parameter || target.field || target.property || operation.payload?.field || '';
   const identity =
-    target.moduleId ||
-    target.channelId ||
-    target.slotId ||
-    target.noteId ||
     target.placementId ||
+    target.noteId ||
     target.zoneId ||
-    target.rowId ||
+    target.slotId ||
+    target.stepId ||
+    (target.rowId !== undefined && target.stepIndex !== undefined
+      ? `${target.rowId}:${target.stepIndex}`
+      : '') ||
+    target.channelId ||
+    target.moduleId ||
     'project';
   return `${operation.domain || 'unknown'}:${identity}:${field || operation.action || 'value'}`;
 }

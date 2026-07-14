@@ -50,4 +50,16 @@ describe('OperationJournal', () => {
     journal.setCheckpoint({ revision: 8, vector: { beta: 1 } });
     expect(journal.diagnostics()).toMatchObject({ conflictCount: 0, checkpoint: { revision: 8 } });
   });
+
+  test('isolates persisted journals by room', () => {
+    const storage = new MemoryJournalStorage();
+    const roomA = new OperationJournal({ roomId: 'ROOM-A', actorId: 'alpha', storage });
+    const op = operation();
+    roomA.enqueue(op);
+    const roomB = new OperationJournal({ roomId: 'ROOM-B', actorId: 'alpha', storage });
+
+    expect(roomB.entries.size).toBe(0);
+    roomB.setRoom('ROOM-A');
+    expect(roomB.entries.has(op.opId)).toBe(true);
+  });
 });

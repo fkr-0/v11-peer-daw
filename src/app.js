@@ -4,7 +4,8 @@
 import { PeernetLobby } from '../vendor/peernet-lib.js';
 import { AudioGraphSync } from './core/audio-graph-sync.js';
 import { AudioRuntime } from './core/audio.js';
-import { Arrangement, Clip, ClipSlot } from './core/clips-arrangement.js';
+import { Arrangement, Clip, ClipSlot, createPlacementId } from './core/clips-arrangement.js';
+import { CollaborationEngine } from './core/collaboration-engine.js';
 import { PortType } from './core/contracts.js';
 import {
   midiToNoteName as formatMidiNoteName,
@@ -23,9 +24,19 @@ import {
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
 import { PROJECT_SYNC_CHANNEL, ProjectSyncState } from './core/project-sync.js';
+import {
+  applyProjectOperation,
+  recordAppliedOperation,
+} from './core/project-operation-reducers.js';
+import {
+  COLLABORATION_PROTOCOL,
+  OPERATION_DOMAINS,
+  structuredCloneSafe,
+} from './core/project-operations.js';
 import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
 import {
   createProjectSource,
+  normalizeProjectStableIds,
   serializeClipState as serializeClipStateSnapshot,
   serializeMixerState as serializeMixerStateSnapshot,
   serializeRig as serializeRigSnapshot,
@@ -53,6 +64,7 @@ import {
   renderSampleLibraryMatrixHtml,
   renderSampleLibraryTreeHtml,
 } from './ui/sample-panel-renderer.js';
+import { SyncCenter, compactSyncLabel } from './ui/sync-center.js';
 import { APP_VERSION } from './version.js';
 
 class V11PeerDAW {
@@ -88,7 +100,6 @@ class V11PeerDAW {
       capture: () => this.serializeRig(),
       apply: (payload) => this.applyRig(payload),
     });
-
     // Session state
     this.urlParams = new URLSearchParams(window.location.search);
     this.sessionCode = this.normalizeSessionCode(this.urlParams.get('session')) || null;
@@ -102,10 +113,48 @@ class V11PeerDAW {
     this.workspaceView = 'session';
     this.lastRenderedWorkspaceView = null;
     this.suppressProjectBroadcast = false;
-    this.clientId = `v11-client-${Math.random().toString(36).slice(2, 10)}`;
+    this.clientId = this.restorePersistentClientId();
     this.projectSync = new ProjectSyncState({
       clientId: this.clientId,
       sessionCode: this.defaultSessionCode,
+    });
+    this.operationReducerContext = { fieldVersions: new Map(), tombstones: new Map() };
+    this.collaborationRecoveryPending = false;
+    let journalStorage = null;
+    try {
+      journalStorage = window.localStorage;
+    } catch (_) {}
+    this.collaboration = new CollaborationEngine({
+      actorId: this.clientId,
+      sessionCode: this.defaultSessionCode,
+      storage: journalStorage,
+      send: (message, options) => this.sendProjectSyncMessage(message, options),
+      applyOperation: (operation, meta) => this.applyCollaborationOperation(operation, meta),
+      requestSnapshot: ({ reason } = {}) => {
+        this.collaborationRecoveryPending = true;
+        this.logText(`snapshot recovery requested: ${reason || 'operation recovery'}`);
+        this.requestLocalSessionProject({ force: true });
+      },
+      getRevision: () => this.localProjectVersion,
+      onChange: (state) => this.renderCollaborationState(state),
+    });
+    this.syncCenter = new SyncCenter({
+      root: document.querySelector('#syncCenter'),
+      getState: () => this.collaboration.diagnostics(),
+      actions: {
+        retry: () => this.retryCollaborationOperations(),
+        snapshot: () => {
+          this.collaborationRecoveryPending = true;
+          this.requestLocalSessionProject({ force: true });
+        },
+        exportJournal: () => this.exportCollaborationJournal(),
+        clearAcknowledged: () => {
+          this.collaboration.journal.clearAcknowledged();
+          this.collaboration.emitChange();
+        },
+        resolveConflict: (conflictId, resolution) =>
+          this.resolveCollaborationConflict(conflictId, resolution),
+      },
     });
     this.localProjectVersion = 0;
     this.lastAppliedProjectStamp = { version: 0, clientId: '' };
@@ -116,6 +165,7 @@ class V11PeerDAW {
     this.localSessionHeartbeatTimer = null;
     this.localSessionPruneTimer = null;
     this.localSessionSyncTimer = null;
+    this.compatibilitySnapshotTimer = null;
     this.localSessionBeforeUnloadBound = false;
     this.localSyncStatus = 'starting';
     this.localSyncRequestId = null;
@@ -151,6 +201,33 @@ class V11PeerDAW {
     });
   }
 
+  restorePersistentClientId() {
+    const key = 'v11-peer-daw-tab-client-id';
+    try {
+      const existing = window.sessionStorage?.getItem?.(key);
+      if (existing) return existing;
+      const created = `v11-client-${globalThis.crypto?.randomUUID?.()?.slice(0, 12) || Math.random().toString(36).slice(2, 14)}`;
+      window.sessionStorage?.setItem?.(key, created);
+      return created;
+    } catch (_) {
+      return `v11-client-${Math.random().toString(36).slice(2, 14)}`;
+    }
+  }
+
+  setObjectPathValue(target, path, value) {
+    const parts = String(path || '').split('.').filter(Boolean);
+    if (!target || !parts.length) return false;
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      if (!cursor[part] || typeof cursor[part] !== 'object') {
+        cursor[part] = /^\d+$/.test(part) ? [] : {};
+      }
+      cursor = cursor[part];
+    }
+    cursor[parts.at(-1)] = structuredCloneSafe(value);
+    return true;
+  }
+
   showToast(message, { tone = 'info', timeout = 2400 } = {}) {
     const region = document.querySelector('#toastRegion');
     if (!region || !message) return null;
@@ -166,6 +243,91 @@ class V11PeerDAW {
     }, timeout);
     this.toastTimers.add(timer);
     return toast;
+  }
+
+  bindSyncCenter() {
+    this.syncCenter.bind();
+    document.querySelector('#btnSyncCenter')?.addEventListener('click', (event) =>
+      this.syncCenter.open(event.currentTarget)
+    );
+    document.querySelector('#btnOpenSyncCenter')?.addEventListener('click', (event) =>
+      this.syncCenter.open(event.currentTarget)
+    );
+  }
+
+  publishNoteUpdate(module, note, reason = 'note-update', options = {}) {
+    if (!module || !note?.id) return null;
+    return this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.NOTE,
+      'update',
+      {
+        moduleId: module.id,
+        noteId: note.id,
+        noteName: note.note,
+        field: options.field || 'note',
+      },
+      {
+        patch: {
+          beat: note.beat,
+          note: note.note,
+          velocity: note.velocity,
+          duration: note.duration,
+        },
+      },
+      { reason, coalesce: Boolean(options.coalesce) }
+    );
+  }
+
+  renderCollaborationState(state = this.collaboration?.diagnostics?.() || {}) {
+    const button = document.querySelector('#btnSyncCenter');
+    if (button) {
+      button.textContent = compactSyncLabel(state);
+      button.dataset.state = state.state || 'synced';
+      button.title = `${Number(state.pendingCount || 0)} pending · ${Number(state.conflictCount || 0)} conflicts · protocol ${Number(state.protocol || 0)}`;
+    }
+    document.documentElement.dataset.collaborationState = state.state || 'synced';
+    if (this.syncCenter?.isOpen?.()) this.syncCenter.render();
+  }
+
+  retryCollaborationOperations() {
+    const count = this.collaboration.replayPending();
+    this.showToast(count ? `Retrying ${count} operation${count === 1 ? '' : 's'}` : 'No pending operations');
+    return count;
+  }
+
+  exportCollaborationJournal() {
+    const data = JSON.stringify(this.collaboration.journal.snapshot(), null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `v11-peer-daw-${this.defaultSessionCode.toLowerCase()}-recovery-journal.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    this.showToast('Recovery journal exported', { tone: 'success' });
+    return data;
+  }
+
+  resolveCollaborationConflict(conflictId, resolution) {
+    const conflict = this.collaboration.journal.conflicts.find((item) => item.id === conflictId);
+    if (!conflict) return null;
+    if (resolution === 'accept-remote' && conflict.operation) {
+      const result = this.applyCollaborationOperation(conflict.operation, { force: true });
+      if (result.status !== 'applied' && result.status !== 'duplicate') {
+        this.requestLocalSessionProject({ force: true });
+      }
+    }
+    if (resolution === 'keep-local') this.publishProjectChange('conflict-keep-local');
+    const resolved = this.collaboration.resolveConflict(conflictId, resolution);
+    this.showToast(
+      resolution === 'recover-snapshot'
+        ? 'Snapshot recovery requested'
+        : resolution === 'keep-local'
+          ? 'Local state kept'
+          : 'Remote operation accepted',
+      { tone: 'success' }
+    );
+    return resolved;
   }
 
   bindLayoutControls() {
@@ -366,6 +528,8 @@ class V11PeerDAW {
     this.defaultSessionCode = nextCode;
     this.sessionCode = nextCode;
     this.projectSync.setSessionCode(nextCode);
+    this.collaboration.setSessionCode(nextCode);
+    this.operationReducerContext = { fieldVersions: new Map(), tombstones: new Map() };
     if (updateUrl) this.updateSessionUrl(nextCode);
     const session = await this.bootstrapDefaultPeernetSession({ force: true });
     this.bindLocalSessionBus();
@@ -384,12 +548,12 @@ class V11PeerDAW {
         peerCount: this.localSessionPeers.size,
         delivered: this.localSessionPeers.size > 0,
       };
-      this.projectSync.markSent('local', delivery);
+      if (message.protocol !== COLLABORATION_PROTOCOL) this.projectSync.markSent('local', delivery);
       deliveries.push({ transport: 'local', ...delivery });
     }
     if ((transport === 'all' || transport === 'peernet') && this.peernet.started) {
       const delivery = this.peernet.send(PROJECT_SYNC_CHANNEL, message, peerId);
-      this.projectSync.markSent('peernet', delivery);
+      if (message.protocol !== COLLABORATION_PROTOCOL) this.projectSync.markSent('peernet', delivery);
       deliveries.push({ transport: 'peernet', ...delivery });
     }
     this.renderLocalSyncStatus();
@@ -463,6 +627,11 @@ class V11PeerDAW {
         : `Peernet room snapshot received from ${message.clientId}`
     );
     this.applyRemoteProject(message.project);
+    this.collaboration.checkpoint({
+      revision: this.localProjectVersion,
+      recovered: this.collaborationRecoveryPending,
+    });
+    this.collaborationRecoveryPending = false;
     this.renderLocalSyncStatus();
   }
 
@@ -477,6 +646,10 @@ class V11PeerDAW {
 
   handleProjectSyncMessage(message = {}, meta = {}) {
     const transport = meta.transport || 'unknown';
+    if (message.protocol === COLLABORATION_PROTOCOL) {
+      this.collaboration.receive(message, meta);
+      return;
+    }
     if (!this.projectSync.accept(message, meta)) return;
     if (message.type === 'project-request') {
       this.sendLocalProjectSnapshot(message, { transport, peerId: meta.peerId || '' });
@@ -533,6 +706,7 @@ class V11PeerDAW {
     this.createStarfield();
     this.bindExampleProjects();
     this.bindChrome();
+    this.bindSyncCenter();
     this.bindLayoutControls();
     this.restoreLayoutState();
     this.restoreSurfaceStates();
@@ -554,6 +728,8 @@ class V11PeerDAW {
     this.renderWorkspaceView();
     await this.bootstrapDefaultPeernetSession();
     this.bindLocalSessionBus();
+    this.collaboration.start();
+    this.collaboration.replayPending();
     this.autoJoinFromUrl();
   }
 
@@ -598,6 +774,7 @@ class V11PeerDAW {
       this.handleLocalSessionMessage(event.data || {})
     );
     this.announceLocalSessionPresence('join');
+    this.collaboration.broadcastCapabilities();
     this.localSessionHeartbeatTimer = window.setInterval(
       () => this.announceLocalSessionPresence('heartbeat'),
       10000
@@ -606,9 +783,11 @@ class V11PeerDAW {
     this.requestLocalSessionProject();
     if (!this.localSessionBeforeUnloadBound) {
       this.localSessionBeforeUnloadBound = true;
-      window.addEventListener('beforeunload', () =>
-        this.closeLocalSessionBus({ announce: true })
-      );
+      window.addEventListener('beforeunload', () => {
+        this.collaboration.stop();
+        this.collaboration.journal.persist();
+        this.closeLocalSessionBus({ announce: true });
+      });
     }
   }
 
@@ -650,7 +829,11 @@ class V11PeerDAW {
           name: message.username || 'peer',
           at: message.at || Date.now(),
         });
-      if (message.kind === 'join') this.announceLocalSessionPresence('heartbeat');
+      if (message.kind === 'join') {
+        this.announceLocalSessionPresence('heartbeat');
+        this.collaboration.broadcastCapabilities();
+        this.collaboration.replayPending();
+      }
       this.updateSessionUI();
       return;
     }
@@ -1058,6 +1241,33 @@ class V11PeerDAW {
         run: () => document.querySelector('#btnCreateSession')?.click(),
       },
       {
+        id: 'collaboration:sync-center',
+        title: 'Open Sync Center',
+        detail: 'Inspect pending operations, acknowledgements, conflicts, and recovery',
+        kind: 'collaboration',
+        keywords: 'sync operations journal pending conflict recovery peers',
+        priority: 19,
+        run: () => this.syncCenter.open(document.querySelector('#btnCommandCenter')),
+      },
+      {
+        id: 'collaboration:retry',
+        title: 'Retry Pending Collaboration Edits',
+        detail: 'Replay the local operation outbox to connected peers',
+        kind: 'collaboration',
+        keywords: 'sync retry pending reconnect outbox operations',
+        priority: 18,
+        run: () => this.retryCollaborationOperations(),
+      },
+      {
+        id: 'collaboration:recover',
+        title: 'Request Collaboration Snapshot',
+        detail: 'Recover from the newest complete room checkpoint',
+        kind: 'collaboration',
+        keywords: 'sync recover snapshot checkpoint conflict repair',
+        priority: 17,
+        run: () => this.requestLocalSessionProject({ force: true }),
+      },
+      {
         id: 'layout:focus',
         title: this.layoutState.focus ? 'Exit Focus Mode' : 'Enter Focus Mode',
         detail: 'Toggle a distraction-free central editing workspace',
@@ -1250,6 +1460,8 @@ class V11PeerDAW {
     }
     if (this.peernetProjectSyncConnected) return;
     this.peernetProjectSyncConnected = true;
+    this.collaboration.broadcastCapabilities();
+    this.collaboration.replayPending();
     window.setTimeout(
       () => this.requestLocalSessionProject({ force: true }),
       120
@@ -1558,7 +1770,7 @@ class V11PeerDAW {
           : 'grid-drag-edit';
     this.gridDrag = null;
     this.renderWorkspaceView();
-    this.publishProjectChange(reason);
+    this.logText(reason);
   }
 
   handleGridShortcut(event) {
@@ -1616,7 +1828,6 @@ class V11PeerDAW {
     this.gridSelection.clear();
     this.logText(`erased ${count} grid cells`);
     this.renderWorkspaceView();
-    this.publishProjectChange('grid-erase-selection');
   }
 
   editGridSelectionWithKeyboard(key, modifiers = {}) {
@@ -1635,6 +1846,10 @@ class V11PeerDAW {
             stepResolution,
             Number((Number(note.duration || stepResolution) + delta).toFixed(6))
           );
+          this.publishNoteUpdate(module, note, 'grid-note-duration', {
+            field: 'duration',
+            coalesce: true,
+          });
           nextSelection.add(this.gridCellKey(data));
           continue;
         }
@@ -1644,6 +1859,10 @@ class V11PeerDAW {
             0,
             Math.min(1, Number((Number(note.velocity || 0.8) + delta).toFixed(2)))
           );
+          this.publishNoteUpdate(module, note, 'grid-note-velocity', {
+            field: 'velocity',
+            coalesce: true,
+          });
           nextSelection.add(this.gridCellKey(data));
           continue;
         }
@@ -1656,11 +1875,13 @@ class V11PeerDAW {
               true,
               data
             );
-          else
+          else {
             note.beat = Math.max(
               0,
               Number((Number(note.beat || 0) + deltaSteps * stepResolution).toFixed(6))
             );
+            this.publishNoteUpdate(module, note, 'grid-note-move', { field: 'beat' });
+          }
           target.step = String(Math.max(0, Number(data.step) + deltaSteps));
         }
         if (key === 'ArrowUp' || key === 'ArrowDown') {
@@ -1671,7 +1892,10 @@ class V11PeerDAW {
               true,
               data
             );
-          else note.note = this.midiToNoteName(this.noteNameToMidi(note.note) + deltaMidi);
+          else {
+            note.note = this.midiToNoteName(this.noteNameToMidi(note.note) + deltaMidi);
+            this.publishNoteUpdate(module, note, 'grid-note-pitch', { field: 'note' });
+          }
           target.note = this.midiToNoteName(this.noteNameToMidi(data.note) + deltaMidi);
         }
         nextSelection.add(this.gridCellKey(target));
@@ -1699,7 +1923,6 @@ class V11PeerDAW {
       `grid keyboard edit: ${key}${modifiers.shift ? ' shift' : ''}${modifiers.copy ? ' copy' : ''}`
     );
     this.renderWorkspaceView();
-    this.publishProjectChange('grid-keyboard-edit');
   }
 
   readGridCellState(data = {}) {
@@ -1730,7 +1953,16 @@ class V11PeerDAW {
       const existing = module.notes?.findIndex(
         (note) => note.note === data.note && Math.round(note.beat / stepResolution) === step
       );
-      if (!enabled && existing >= 0) module.notes.splice(existing, 1);
+      if (!enabled && existing >= 0) {
+        const [removed] = module.notes.splice(existing, 1);
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.NOTE,
+          'delete',
+          { moduleId: module.id, noteId: removed.id, noteName: removed.note },
+          {},
+          { reason: 'grid-note-delete' }
+        );
+      }
       if (enabled && existing < 0) {
         const template =
           source?.gridKind === 'piano'
@@ -1741,7 +1973,7 @@ class V11PeerDAW {
               )
             : null;
         module.notes = module.notes || [];
-        module.notes.push({
+        const note = {
           id: `note-${Date.now()}-${module.notes.length}`,
           kind: PortType.MIDI,
           type: 'note-on',
@@ -1749,8 +1981,16 @@ class V11PeerDAW {
           note: data.note,
           velocity: template?.velocity ?? 0.8,
           duration: template?.duration ?? stepResolution * 2,
-        });
+        };
+        module.notes.push(note);
         module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.NOTE,
+          'add',
+          { moduleId: module.id, noteId: note.id, noteName: note.note },
+          { note: structuredCloneSafe(note) },
+          { reason: 'grid-note-add' }
+        );
       }
       module.render?.();
       return;
@@ -1762,7 +2002,21 @@ class V11PeerDAW {
           ? module.rows?.find((candidate) => candidate.id === source.rowId)
           : null;
       const template = templateRow?.steps?.[Number(source?.stepIndex)];
-      module.setStep?.(data.rowId, stepIndex, { ...(template || {}), enabled });
+      const patch = { ...(template || {}), enabled };
+      module.setStep?.(data.rowId, stepIndex, patch);
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.SEQUENCER_STEP,
+        enabled ? 'set' : 'clear',
+        {
+          moduleId: module.id,
+          rowId: data.rowId,
+          stepIndex,
+          stepId: `${data.rowId}:${stepIndex}`,
+          field: 'enabled',
+        },
+        { patch },
+        { reason: enabled ? 'sequencer-step-set' : 'sequencer-step-clear', coalesce: true }
+      );
       return;
     }
     if (data.gridKind === 'ocra') {
@@ -1773,8 +2027,16 @@ class V11PeerDAW {
         source?.gridKind === 'ocra'
           ? module.grid?.[Number(source.rowIndex)]?.[Number(source.colIndex)]
           : null;
-      module.grid[row][col] = enabled ? (sourceChar && sourceChar !== '.' ? sourceChar : 'D') : '.';
+      const value = enabled ? (sourceChar && sourceChar !== '.' ? sourceChar : 'D') : '.';
+      module.grid[row][col] = value;
       module.renderGrid?.(null);
+      this.publishModuleParameter(
+        module,
+        `grid.${row}.${col}`,
+        value,
+        'ocra-grid-cell',
+        { coalesce: true }
+      );
     }
   }
 
@@ -1816,7 +2078,6 @@ class V11PeerDAW {
     }
     this.logText(`duplicated ${parsed.length} grid cells`);
     this.renderWorkspaceView();
-    this.publishProjectChange('grid-duplicate');
   }
 
   workspaceViewMetadata(view = this.workspaceView) {
@@ -2123,18 +2384,38 @@ class V11PeerDAW {
     if (action === 'launch') {
       const beat = slot.queueLaunch(slot.clip, this.currentBeat);
       this.logText(`clip launched at beat ${beat}: ${slot.name}`);
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.CLIP_SLOT,
+        'launch',
+        { slotId: slot.id, slotTitle: slot.name, field: 'launchBeat' },
+        { beat },
+        { reason: 'clip-launch', coalesce: true }
+      );
     }
     if (action === 'stop') {
       const beat = slot.queueStop(this.currentBeat);
       this.logText(`clip stop queued at beat ${beat}: ${slot.name}`);
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.CLIP_SLOT,
+        'stop',
+        { slotId: slot.id, slotTitle: slot.name, field: 'stopBeat' },
+        { beat },
+        { reason: 'clip-stop', coalesce: true }
+      );
     }
     if (action === 'place') this.placeSlotOnArrangement(slot.id);
     if (action === 'delete') {
       this.clipSlots = this.clipSlots.filter((item) => item.id !== slot.id);
       this.logText(`clip slot removed: ${slot.name}`);
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.CLIP_SLOT,
+        'delete',
+        { slotId: slot.id, slotTitle: slot.name },
+        {},
+        { reason: 'clip-delete' }
+      );
     }
     this.renderWorkspaceView();
-    this.publishProjectChange(`clip-${action}`);
     return slot;
   }
 
@@ -2148,7 +2429,14 @@ class V11PeerDAW {
     this.clipSlots.push(slot);
     this.logText(`clip slot created: ${slot.name}`);
     this.renderWorkspaceView();
-    this.publishProjectChange('clip-created');
+    const serialized = this.serializeClipState().slots.find((candidate) => candidate.id === slot.id);
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.CLIP_SLOT,
+      'add',
+      { slotId: slot.id, slotTitle: slot.name },
+      { slot: serialized },
+      { reason: 'clip-created' }
+    );
     return slot;
   }
 
@@ -2157,25 +2445,59 @@ class V11PeerDAW {
     if (!slot?.clip) return null;
     const startBeat = this.arrangement.clips.length * 4;
     const placement = this.arrangement.placeClip({
+      placementId: createPlacementId(),
       clip: slot.clip,
       startBeat,
       trackId: slot.moduleId || slot.channelId,
     });
     this.logText(`clip placed on arrangement: ${slot.name} @ beat ${startBeat}`);
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+      'add',
+      {
+        placementId: placement.placementId,
+        clipTitle: placement.clip.name,
+      },
+      {
+        placement: {
+          placementId: placement.placementId,
+          clip: placement.clip.serialize(),
+          startBeat: placement.startBeat,
+          trackId: placement.trackId,
+        },
+      },
+      { reason: 'arrangement-place' }
+    );
     return placement;
   }
 
   placeAllClipsOnArrangement() {
     for (const slot of this.clipSlots) this.placeSlotOnArrangement(slot.id);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-place-all');
   }
 
   clearArrangement() {
+    const removed = this.arrangement.clips.map((placement) => ({
+      domain: OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+      action: 'delete',
+      target: {
+        placementId: placement.placementId,
+        clipTitle: placement.clip.name,
+      },
+      payload: {},
+    }));
     this.arrangement = new Arrangement({ loopStartBeat: 0, loopEndBeat: 16 });
     this.logText('arrangement cleared');
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-cleared');
+    if (removed.length) {
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.BATCH,
+        'apply',
+        { batchId: `clear-arrangement-${Date.now()}` },
+        { operations: removed },
+        { reason: 'arrangement-cleared' }
+      );
+    }
   }
 
   arrangementLengthBeats() {
@@ -2186,23 +2508,39 @@ class V11PeerDAW {
     return Math.max(16, this.arrangement.loopEndBeat || 0, clipEnd);
   }
 
-  placementByIndex(index) {
-    return this.arrangement.clips[Number(index)] || null;
+  placementByIdentifier(identifier) {
+    if (identifier === undefined || identifier === null) return null;
+    return (
+      this.arrangement.clips.find((placement) => placement.placementId === identifier) ||
+      this.arrangement.clips[Number(identifier)] ||
+      null
+    );
   }
 
-  moveArrangementPlacement(index, delta) {
-    const placement = this.placementByIndex(index);
+  placementByIndex(index) {
+    return this.placementByIdentifier(index);
+  }
+
+  moveArrangementPlacement(identifier, delta) {
+    const placement = this.placementByIdentifier(identifier);
     if (!placement) return;
     placement.startBeat = Math.max(0, Number((placement.startBeat + delta).toFixed(6)));
     this.logText(`arrangement clip moved: ${placement.clip.name} @ beat ${placement.startBeat}`);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-move');
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+      'update',
+      { placementId: placement.placementId, clipTitle: placement.clip.name, field: 'startBeat' },
+      { patch: { startBeat: placement.startBeat } },
+      { reason: 'arrangement-move', coalesce: true }
+    );
   }
 
-  duplicateArrangementPlacement(index) {
-    const placement = this.placementByIndex(index);
+  duplicateArrangementPlacement(identifier) {
+    const placement = this.placementByIdentifier(identifier);
     if (!placement) return;
     const duplicate = this.arrangement.placeClip({
+      placementId: createPlacementId(),
       clip: new Clip({
         ...placement.clip.serialize(),
         id: `${placement.clip.id}-copy-${Date.now()}`,
@@ -2213,16 +2551,38 @@ class V11PeerDAW {
     });
     this.logText(`arrangement clip duplicated: ${duplicate.clip.name}`);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-duplicate');
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+      'add',
+      { placementId: duplicate.placementId, clipTitle: duplicate.clip.name },
+      {
+        placement: {
+          placementId: duplicate.placementId,
+          clip: duplicate.clip.serialize(),
+          startBeat: duplicate.startBeat,
+          trackId: duplicate.trackId,
+        },
+      },
+      { reason: 'arrangement-duplicate' }
+    );
+    return duplicate;
   }
 
-  deleteArrangementPlacement(index) {
-    const placement = this.placementByIndex(index);
+  deleteArrangementPlacement(identifier) {
+    const placement = this.placementByIdentifier(identifier);
     if (!placement) return;
-    this.arrangement.clips.splice(Number(index), 1);
+    this.arrangement.clips = this.arrangement.clips.filter(
+      (candidate) => candidate.placementId !== placement.placementId
+    );
     this.logText(`arrangement clip removed: ${placement.clip.name}`);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-delete');
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+      'delete',
+      { placementId: placement.placementId, clipTitle: placement.clip.name },
+      {},
+      { reason: 'arrangement-delete' }
+    );
   }
 
   setArrangementLoop(startBeat, endBeat) {
@@ -2232,7 +2592,13 @@ class V11PeerDAW {
     this.arrangement.loopEndBeat = end;
     this.logText(`arrangement loop set: ${start}-${end}`);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-loop');
+    this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.ARRANGEMENT_LOOP,
+      'set',
+      { field: 'loop' },
+      { startBeat: start, endBeat: end },
+      { reason: 'arrangement-loop', coalesce: true }
+    );
   }
 
   previewArrangementBeat(beat) {
@@ -2242,15 +2608,14 @@ class V11PeerDAW {
     const events = this.arrangement.eventsAt(this.currentBeat);
     this.logText(`arrangement preview beat ${this.currentBeat}: ${events.length} events`);
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-preview');
   }
 
   handleArrangementAction(action, target) {
-    const index = target.dataset.placementIndex;
-    if (action === 'move-left') return this.moveArrangementPlacement(index, -1);
-    if (action === 'move-right') return this.moveArrangementPlacement(index, 1);
-    if (action === 'duplicate') return this.duplicateArrangementPlacement(index);
-    if (action === 'delete') return this.deleteArrangementPlacement(index);
+    const identifier = target.dataset.placementId || target.dataset.placementIndex;
+    if (action === 'move-left') return this.moveArrangementPlacement(identifier, -1);
+    if (action === 'move-right') return this.moveArrangementPlacement(identifier, 1);
+    if (action === 'duplicate') return this.duplicateArrangementPlacement(identifier);
+    if (action === 'delete') return this.deleteArrangementPlacement(identifier);
     if (action === 'preview')
       return this.previewArrangementBeat(target.dataset.beat ?? this.currentBeat);
     return null;
@@ -2259,11 +2624,11 @@ class V11PeerDAW {
   handleArrangementPointerDown(event) {
     const clip = event.target.closest('[data-arrangement-clip]');
     if (!clip || event.target.closest('button')) return;
-    const index = Number(clip.dataset.placementIndex);
-    const placement = this.placementByIndex(index);
+    const identifier = clip.dataset.placementId || clip.dataset.placementIndex;
+    const placement = this.placementByIdentifier(identifier);
     if (!placement) return;
     if (event.altKey) {
-      this.deleteArrangementPlacement(index);
+      this.deleteArrangementPlacement(identifier);
       event.preventDefault();
       return;
     }
@@ -2273,16 +2638,14 @@ class V11PeerDAW {
         this.modifierState.control ||
         this.modifierState.meta
     );
-    let dragIndex = index;
+    let dragPlacement = placement;
     if (copyModifier) {
-      this.duplicateArrangementPlacement(index);
-      dragIndex = this.arrangement.clips.length - 1;
+      dragPlacement = this.duplicateArrangementPlacement(identifier);
     }
     const track = clip.closest('.timeline-track');
     const rect = track?.getBoundingClientRect();
-    const dragPlacement = this.arrangement.clips[dragIndex];
     this.arrangementDrag = {
-      index: dragIndex,
+      placementId: dragPlacement?.placementId,
       mode: event.target.closest('[data-arrangement-resize]')?.dataset.arrangementResize || 'move',
       startX: event.clientX,
       startBeat: dragPlacement?.startBeat || 0,
@@ -2302,7 +2665,7 @@ class V11PeerDAW {
 
   handleArrangementPointerMove(event) {
     if (!this.arrangementDrag || event.buttons !== 1) return;
-    const placement = this.placementByIndex(this.arrangementDrag.index);
+    const placement = this.placementByIdentifier(this.arrangementDrag.placementId);
     if (!placement) return;
     const deltaPx = event.clientX - this.arrangementDrag.startX;
     const rawDeltaBeats =
@@ -2340,7 +2703,7 @@ class V11PeerDAW {
       );
     }
     const clipEl = document.querySelector(
-      `[data-arrangement-clip][data-placement-index="${CSS.escape(String(this.arrangementDrag.index))}"]`
+      `[data-arrangement-clip][data-placement-id="${CSS.escape(String(this.arrangementDrag.placementId))}"]`
     );
     if (clipEl) {
       clipEl.style.left = `${Math.min(94, (placement.startBeat / this.arrangementDrag.lengthBeats) * 100)}%`;
@@ -2350,14 +2713,32 @@ class V11PeerDAW {
 
   endArrangementDrag() {
     if (!this.arrangementDrag) return;
-    const placement = this.placementByIndex(this.arrangementDrag.index);
+    const drag = this.arrangementDrag;
+    const placement = this.placementByIdentifier(drag.placementId);
     if (placement)
       this.logText(
-        `arrangement clip ${this.arrangementDrag.mode === 'move' ? (this.arrangementDrag.copied ? 'copied' : 'dragged') : 'resized'}: ${placement.clip.name} @ beat ${placement.startBeat} len ${placement.clip.lengthBeats}`
+        `arrangement clip ${drag.mode === 'move' ? (drag.copied ? 'copied' : 'dragged') : 'resized'}: ${placement.clip.name} @ beat ${placement.startBeat} len ${placement.clip.lengthBeats}`
       );
     this.arrangementDrag = null;
     this.renderWorkspaceView();
-    this.publishProjectChange('arrangement-drag');
+    if (placement) {
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT,
+        'update',
+        {
+          placementId: placement.placementId,
+          clipTitle: placement.clip.name,
+          field: drag.mode === 'move' ? 'startBeat' : 'length',
+        },
+        {
+          patch: {
+            startBeat: placement.startBeat,
+            clip: placement.clip.serialize(),
+          },
+        },
+        { reason: 'arrangement-drag', coalesce: true }
+      );
+    }
   }
 
   renderArrangementEditor() {
@@ -2376,7 +2757,7 @@ class V11PeerDAW {
         const trackClips = placements
           .map((placement, index) => ({ ...placement, index }))
           .filter((placement) => placement.trackId === trackId);
-        return `<div class="timeline-lane arrangement-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track"><span class="timeline-playhead" style="left:${playheadPct}%"></span>${trackClips.map((placement) => `<span class="timeline-clip editable" data-arrangement-clip="true" data-placement-index="${placement.index}" style="left:${Math.min(94, (placement.startBeat / length) * 100)}%;width:${Math.max(8, (placement.clip.lengthBeats / length) * 100)}%"><i class="clip-resize-handle left" data-arrangement-resize="resize-start" title="drag to trim start"></i><strong>${this.escapeHtml(placement.clip.name)}</strong><small>@${this.escapeHtml(placement.startBeat)} · ${this.escapeHtml(placement.clip.lengthBeats)}b</small><i class="clip-resize-handle right" data-arrangement-resize="resize-end" title="drag to resize end"></i><span class="clip-actions"><button type="button" data-arrangement-action="move-left" data-placement-index="${placement.index}">◀</button><button type="button" data-arrangement-action="move-right" data-placement-index="${placement.index}">▶</button><button type="button" data-arrangement-action="duplicate" data-placement-index="${placement.index}">DUP</button><button type="button" data-arrangement-action="delete" data-placement-index="${placement.index}">×</button></span></span>`).join('')}</div></div>`;
+        return `<div class="timeline-lane arrangement-lane"><strong>${this.escapeHtml(module?.title || trackId)}</strong><div class="timeline-track"><span class="timeline-playhead" style="left:${playheadPct}%"></span>${trackClips.map((placement) => `<span class="timeline-clip editable" data-arrangement-clip="true" data-placement-id="${this.escapeHtml(placement.placementId)}" data-placement-index="${placement.index}" style="left:${Math.min(94, (placement.startBeat / length) * 100)}%;width:${Math.max(8, (placement.clip.lengthBeats / length) * 100)}%"><i class="clip-resize-handle left" data-arrangement-resize="resize-start" title="drag to trim start"></i><strong>${this.escapeHtml(placement.clip.name)}</strong><small>@${this.escapeHtml(placement.startBeat)} · ${this.escapeHtml(placement.clip.lengthBeats)}b</small><i class="clip-resize-handle right" data-arrangement-resize="resize-end" title="drag to resize end"></i><span class="clip-actions"><button type="button" data-arrangement-action="move-left" data-placement-id="${this.escapeHtml(placement.placementId)}" data-placement-index="${placement.index}">◀</button><button type="button" data-arrangement-action="move-right" data-placement-id="${this.escapeHtml(placement.placementId)}" data-placement-index="${placement.index}">▶</button><button type="button" data-arrangement-action="duplicate" data-placement-id="${this.escapeHtml(placement.placementId)}" data-placement-index="${placement.index}">DUP</button><button type="button" data-arrangement-action="delete" data-placement-id="${this.escapeHtml(placement.placementId)}" data-placement-index="${placement.index}">×</button></span></span>`).join('')}</div></div>`;
       })
       .join('');
     return `<div class="workspace-toolbar arrangement-toolbar"><button type="button" data-clip-action="place-all">PLACE ALL CLIPS</button><button type="button" data-clip-action="clear-arrangement">CLEAR</button><label>Loop start <input data-arrangement-input="loop-start" type="number" min="0" step="1" value="${this.escapeHtml(this.arrangement.loopStartBeat)}"></label><label>Loop end <input data-arrangement-input="loop-end" type="number" min="1" step="1" value="${this.escapeHtml(this.arrangement.loopEndBeat)}"></label><label>Preview beat <input data-arrangement-input="preview-beat" type="number" min="0" step="1" value="${this.escapeHtml(this.currentBeat)}"></label><button type="button" data-arrangement-action="preview" data-beat="${this.escapeHtml(this.currentBeat)}">PREVIEW</button><span class="microcopy">${placements.length} placements · loop ${this.arrangement.loopStartBeat}-${this.arrangement.loopEndBeat} · ${this.arrangement.eventsAt(this.currentBeat).length} events now</span></div>${laneMarkup}<p class="microcopy">Arrangement editing is backed by Arrangement.placeClip(), eventsAt(), and transportPositionAfter(). Drag clip body to move, Ctrl/Cmd-drag to copy, drag edges to resize, Shift for 4-beat snap, Alt for fine 1/4-beat snap/delete.</p>`;
@@ -2743,6 +3124,25 @@ class V11PeerDAW {
       module.setParam('driveAmount', module.driveAmount);
   }
 
+  publishModuleParameter(module, parameter, value, reason = 'module-parameter', options = {}) {
+    if (!module || !parameter) return null;
+    return this.publishCollaborativeOperation(
+      OPERATION_DOMAINS.MODULE_PARAMETER,
+      'set',
+      {
+        moduleId: module.id,
+        moduleTitle: module.title,
+        parameter,
+      },
+      { value: structuredCloneSafe(value) },
+      {
+        reason,
+        coalesce: options.coalesce !== false,
+        summary: options.summary || '',
+      }
+    );
+  }
+
   handleWorkspaceInput(event) {
     const isContinuousControl =
       event.target.type === 'range' || event.target.type === 'number';
@@ -2771,7 +3171,13 @@ class V11PeerDAW {
     if (type === 'master-volume') {
       this.mixerState.masterVolume = Number(input.value);
       this.runtime.setMasterVolume?.(this.mixerState.masterVolume);
-      this.publishProjectChange('mixer-master-volume');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MIXER_MASTER,
+        'set',
+        { field: 'masterVolume' },
+        { value: this.mixerState.masterVolume },
+        { reason: 'mixer-master-volume', coalesce: true }
+      );
       return;
     }
     if (type === 'mixer-gain' || type === 'mixer-pan') {
@@ -2781,7 +3187,14 @@ class V11PeerDAW {
       if (type === 'mixer-gain') channel.gain = Number(input.value);
       if (type === 'mixer-pan') channel.pan = Number(input.value);
       this.applyMixerChannel(moduleId);
-      this.publishProjectChange(type);
+      const field = type === 'mixer-gain' ? 'gain' : 'pan';
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MIXER_CHANNEL,
+        'set',
+        { channelId: moduleId, channelTitle: module.title, field },
+        { value: channel[field] },
+        { reason: type, coalesce: true }
+      );
       return;
     }
     if (type === 'note-velocity') {
@@ -2790,7 +3203,18 @@ class V11PeerDAW {
       if (!note) return;
       note.velocity = Number(input.value);
       if (!isLiveInput) module.render?.();
-      this.publishProjectChange('piano-note-velocity');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.NOTE,
+        'update',
+        {
+          moduleId,
+          noteId: note.id,
+          noteName: note.note,
+          field: 'velocity',
+        },
+        { patch: { velocity: note.velocity } },
+        { reason: 'piano-note-velocity', coalesce: true }
+      );
       return;
     }
     const module = this.patchBay.modules.get(moduleId);
@@ -2801,14 +3225,20 @@ class V11PeerDAW {
         module.render?.();
         this.renderWorkspaceView();
       }
-      this.publishProjectChange('clock-bpm');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.CLOCK,
+        'set-bpm',
+        { moduleId: module.id, moduleTitle: module.title, field: 'bpm' },
+        { value: module.bpm },
+        { reason: 'clock-bpm', coalesce: true }
+      );
       return;
     }
     if (type === 'synth-waveform') {
       if ('waveform' in module) module.waveform = input.value;
       if ('oscillatorType' in module) module.oscillatorType = input.value;
       module.render?.();
-      this.publishProjectChange('synth-waveform');
+      this.publishModuleParameter(module, 'waveform', input.value, 'synth-waveform');
       return;
     }
     if (type === 'synth-cutoff') {
@@ -2816,31 +3246,39 @@ class V11PeerDAW {
       if (module.filter && module.ctx)
         module.filter.frequency.setTargetAtTime(module.cutoff, module.ctx.currentTime, 0.02);
       module.render?.();
-      this.publishProjectChange('synth-cutoff');
+      this.publishModuleParameter(module, 'cutoff', module.cutoff, 'synth-cutoff');
       return;
     }
     if (type === 'synth-release') {
       module.release = Number(input.value) || module.release;
       module.render?.();
-      this.publishProjectChange('synth-release');
+      this.publishModuleParameter(module, 'release', module.release, 'synth-release');
       return;
     }
     if (type === 'synth-param') {
-      this.setSynthParam(module, input.dataset.paramKey, input.value);
+      const key = input.dataset.paramKey;
+      this.setSynthParam(module, key, input.value);
       if (!isLiveInput) this.renderWorkspaceView();
-      this.publishProjectChange('synth-param');
+      const value = key.startsWith('oscillatorMix.')
+        ? module.oscillatorMix?.[key.split('.')[1]]
+        : key === 'waveform'
+          ? module.waveform || module.oscillatorType
+          : module[key] ?? input.value;
+      this.publishModuleParameter(module, key, value, 'synth-param');
       return;
     }
     if (type === 'effect-param') {
-      module.setParam?.(input.dataset.paramKey, input.value);
+      const key = input.dataset.paramKey;
+      module.setParam?.(key, input.value);
       if (!isLiveInput) this.renderWorkspaceView();
-      this.publishProjectChange('effect-param');
+      this.publishModuleParameter(module, key, module[key] ?? Number(input.value), 'effect-param');
       return;
     }
     if (type === 'sampler-param') {
-      module.setParam?.(input.dataset.paramKey, input.value);
+      const key = input.dataset.paramKey;
+      module.setParam?.(key, input.value);
       if (!isLiveInput) this.renderWorkspaceView();
-      this.publishProjectChange('sampler-param');
+      this.publishModuleParameter(module, key, module[key] ?? Number(input.value), 'sampler-param');
       return;
     }
     if (type === 'sampler-meta') {
@@ -2854,19 +3292,24 @@ class V11PeerDAW {
           : input.value;
       module.setSampleMetadata?.({ [key]: value });
       if (!isLiveInput) this.renderWorkspaceView();
-      this.publishProjectChange('sampler-meta');
+      this.publishModuleParameter(module, `sampleMetadata.${key}`, value, 'sampler-meta');
       return;
     }
     if (type === 'drum-swing') {
       module.swing = input.value;
       module.render?.();
-      this.publishProjectChange('drum-swing');
+      this.publishModuleParameter(module, 'swing', module.swing, 'drum-swing');
       return;
     }
     if (type === 'drum-resolution') {
       module.swingResolution = input.value;
       module.render?.();
-      this.publishProjectChange('drum-resolution');
+      this.publishModuleParameter(
+        module,
+        'swingResolution',
+        module.swingResolution,
+        'drum-resolution'
+      );
       return;
     }
     if (type === 'drum-pad') {
@@ -2881,7 +3324,7 @@ class V11PeerDAW {
     if (type === 'multisampler-slices') {
       module.sliceCount = Math.max(1, Math.min(64, Number(input.value) || module.sliceCount || 8));
       if (!isLiveInput) module.render?.();
-      this.publishProjectChange('multisampler-slices');
+      this.publishModuleParameter(module, 'sliceCount', module.sliceCount, 'multisampler-slices');
       return;
     }
     if (type === 'multisampler-zone') {
@@ -2891,13 +3334,20 @@ class V11PeerDAW {
       if (key === 'min' || key === 'max') zone[key] = module.midi?.(input.value) ?? zone[key];
       else zone[key] = input.value;
       if (!isLiveInput) module.render?.();
-      this.publishProjectChange('multisampler-zone');
+      zone.id ||= `${module.id}-zone-${Number(input.dataset.zoneIndex) + 1}`;
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MULTISAMPLER_ZONE,
+        'update',
+        { moduleId: module.id, zoneId: zone.id, field: key },
+        { patch: { [key]: zone[key] } },
+        { reason: 'multisampler-zone', coalesce: true }
+      );
       return;
     }
     if (type === 'sequencer-length') {
       module.setLength?.(input.value);
       this.renderWorkspaceView();
-      this.publishProjectChange('sequencer-length');
+      this.publishModuleParameter(module, 'length', module.length, 'sequencer-length');
       return;
     }
     if (type === 'sequencer-velocity' || type === 'sequencer-micro') {
@@ -2905,7 +3355,19 @@ class V11PeerDAW {
         type === 'sequencer-velocity' ? { velocity: input.value } : { microTiming: input.value };
       module.setStep?.(input.dataset.rowId, Number(input.dataset.stepIndex), patch);
       if (!isLiveInput) this.renderWorkspaceView();
-      this.publishProjectChange(type);
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.SEQUENCER_STEP,
+        'set',
+        {
+          moduleId: module.id,
+          rowId: input.dataset.rowId,
+          stepIndex: Number(input.dataset.stepIndex),
+          stepId: `${input.dataset.rowId}:${input.dataset.stepIndex}`,
+          field: type === 'sequencer-velocity' ? 'velocity' : 'microTiming',
+        },
+        { patch },
+        { reason: type, coalesce: true }
+      );
       return;
     }
     if (type === 'ocra-row') {
@@ -2915,7 +3377,13 @@ class V11PeerDAW {
         .slice(0, 32);
       if (module.grid?.[rowIndex]) module.grid[rowIndex] = value.split('');
       module.renderGrid?.(null);
-      this.publishProjectChange('ocra-row');
+      this.publishModuleParameter(
+        module,
+        `grid.${rowIndex}`,
+        structuredCloneSafe(module.grid[rowIndex]),
+        'ocra-row',
+        { coalesce: true }
+      );
       return;
     }
     if (type === 'arp-notes') {
@@ -2926,13 +3394,14 @@ class V11PeerDAW {
       module.velocities = new Map(module.notes.map((note) => [note, 0.7]));
       module.render?.();
       this.renderWorkspaceView();
-      this.publishProjectChange('arp-notes');
+      this.publishModuleParameter(module, 'notes', structuredCloneSafe(module.notes), 'arp-notes');
       return;
     }
     if (type === 'arp-param') {
-      module.setParam?.(input.dataset.paramKey, input.value);
+      const key = input.dataset.paramKey;
+      module.setParam?.(key, input.value);
       this.renderWorkspaceView();
-      this.publishProjectChange('arp-param');
+      this.publishModuleParameter(module, key, module[key] ?? input.value, 'arp-param');
       return;
     }
     if (type === 'field-take') {
@@ -2991,7 +3460,13 @@ class V11PeerDAW {
       }
       for (const id of Object.keys(this.mixerState.channels)) this.applyMixerChannel(id);
       this.renderWorkspaceView();
-      this.publishProjectChange('unsolo-all');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MIXER_CHANNEL,
+        'unsolo-all',
+        { field: 'solo' },
+        { value: false },
+        { reason: 'unsolo-all' }
+      );
       return;
     }
     const moduleId = target.dataset.moduleId;
@@ -3009,7 +3484,14 @@ class V11PeerDAW {
       if (action === 'toggle-solo') channel.solo = !channel.solo;
       this.applyMixerChannel(moduleId);
       this.renderWorkspaceView();
-      this.publishProjectChange(action);
+      const field = action === 'toggle-mute' ? 'muted' : 'solo';
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MIXER_CHANNEL,
+        'set',
+        { channelId: moduleId, channelTitle: module.title, field },
+        { value: channel[field] },
+        { reason: action }
+      );
       return;
     }
     if (action === 'toggle-note') {
@@ -3021,9 +3503,17 @@ class V11PeerDAW {
           note.note === noteName &&
           Math.round(note.beat / stepResolution) === Number(target.dataset.step)
       );
-      if (index >= 0) module.notes.splice(index, 1);
-      else
-        module.notes.push({
+      if (index >= 0) {
+        const [removed] = module.notes.splice(index, 1);
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.NOTE,
+          'delete',
+          { moduleId: module.id, noteId: removed.id, noteName: removed.note },
+          {},
+          { reason: 'piano-note-toggle-delete' }
+        );
+      } else {
+        const note = {
           id: `note-${Date.now()}-${module.notes.length}`,
           kind: PortType.MIDI,
           type: 'note-on',
@@ -3031,16 +3521,24 @@ class V11PeerDAW {
           note: noteName,
           velocity: 0.8,
           duration: stepResolution * 2,
-        });
+        };
+        module.notes.push(note);
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.NOTE,
+          'add',
+          { moduleId: module.id, noteId: note.id, noteName: note.note },
+          { note: structuredCloneSafe(note) },
+          { reason: 'piano-note-toggle-add' }
+        );
+      }
       module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
       module.render?.();
       this.renderWorkspaceView();
-      this.publishProjectChange('piano-note-toggle');
       return;
     }
     if (action === 'add-note') {
       module.notes = module.notes || [];
-      module.notes.push({
+      const note = {
         id: `note-${Date.now()}`,
         kind: PortType.MIDI,
         type: 'note-on',
@@ -3048,23 +3546,65 @@ class V11PeerDAW {
         note: 'C4',
         velocity: 0.8,
         duration: module.stepResolutionBeats || 0.25,
-      });
+      };
+      module.notes.push(note);
       module.render?.();
       this.renderWorkspaceView();
-      this.publishProjectChange('piano-note-added');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.NOTE,
+        'add',
+        { moduleId: module.id, noteId: note.id, noteName: note.note },
+        { note: structuredCloneSafe(note) },
+        { reason: 'piano-note-added' }
+      );
       return;
     }
     if (action === 'clear-notes') {
+      const hadNotes = Boolean(module.notes?.length);
       module.notes = [];
       module.render?.();
       this.renderWorkspaceView();
-      this.publishProjectChange('piano-notes-cleared');
+      if (hadNotes) {
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.NOTE,
+          'clear',
+          { moduleId: module.id, noteId: '*' },
+          {},
+          { reason: 'piano-notes-cleared' }
+        );
+      }
       return;
     }
     if (action === 'apply-swing') {
       module.applySwingToClip?.({ amount: 'swing60', resolution: '1/8' });
       this.renderWorkspaceView();
-      this.publishProjectChange('piano-swing-applied');
+      const operations = (module.notes || []).map((note) => ({
+        domain: OPERATION_DOMAINS.NOTE,
+        action: 'update',
+        target: {
+          moduleId: module.id,
+          noteId: note.id,
+          noteName: note.note,
+          field: 'beat',
+        },
+        payload: {
+          patch: {
+            beat: note.beat,
+            note: note.note,
+            velocity: note.velocity,
+            duration: note.duration,
+          },
+        },
+      }));
+      if (operations.length) {
+        this.publishCollaborativeOperation(
+          OPERATION_DOMAINS.BATCH,
+          'apply',
+          { batchId: `swing-${module.id}-${Date.now()}` },
+          { operations },
+          { reason: 'piano-swing-applied' }
+        );
+      }
       return;
     }
     if (action === 'audition-note') {
@@ -3097,13 +3637,25 @@ class V11PeerDAW {
         name: `cue ${(module.sampleMetadata?.cues?.length || 0) + 1}`,
       });
       this.renderWorkspaceView();
-      this.publishProjectChange('sampler-add-cue');
+      this.publishModuleParameter(
+        module,
+        'sampleMetadata.cues',
+        structuredCloneSafe(module.sampleMetadata?.cues || []),
+        'sampler-add-cue',
+        { coalesce: false }
+      );
       return;
     }
     if (action === 'sampler-gen-cues') {
       module.generateInBeatCues?.({ startMs: 0, bpm: module.sampleMetadata?.bpm || 120, beats: 4 });
       this.renderWorkspaceView();
-      this.publishProjectChange('sampler-gen-cues');
+      this.publishModuleParameter(
+        module,
+        'sampleMetadata.cues',
+        structuredCloneSafe(module.sampleMetadata?.cues || []),
+        'sampler-gen-cues',
+        { coalesce: false }
+      );
       return;
     }
     if (action === 'drum-trigger-pad') {
@@ -3130,16 +3682,33 @@ class V11PeerDAW {
     }
     if (action === 'multisampler-add-zone') {
       module.zones = module.zones || [];
-      module.zones.push({
+      const zone = {
+        id: `${module.id}-zone-${Date.now().toString(36)}`,
         name: `zone ${module.zones.length + 1}`,
         rootNote: 'C4',
         min: module.midi?.('C1') ?? 24,
         max: module.midi?.('C7') ?? 96,
         buffer: null,
-      });
+      };
+      module.zones.push(zone);
       module.render?.();
       this.renderWorkspaceView();
-      this.publishProjectChange('multisampler-add-zone');
+      this.publishCollaborativeOperation(
+        OPERATION_DOMAINS.MULTISAMPLER_ZONE,
+        'add',
+        { moduleId: module.id, zoneId: zone.id },
+        {
+          zone: {
+            id: zone.id,
+            name: zone.name,
+            rootNote: zone.rootNote,
+            min: zone.min,
+            max: zone.max,
+            buffer: null,
+          },
+        },
+        { reason: 'multisampler-add-zone' }
+      );
       return;
     }
     if (action === 'multisampler-preview-slice') {
@@ -3152,7 +3721,6 @@ class V11PeerDAW {
       this.selectGridCell(data, { append: target.shiftKey, selected: true });
       this.writeGridCell(data, !this.readGridCellState(data));
       this.renderWorkspaceView();
-      this.publishProjectChange('sequencer-toggle-step');
       return;
     }
     if (action === 'sequencer-convert') {
@@ -3169,21 +3737,29 @@ class V11PeerDAW {
       );
       module.renderGrid?.(null);
       this.renderWorkspaceView();
-      this.publishProjectChange('ocra-clear');
+      this.publishModuleParameter(module, 'grid', structuredCloneSafe(module.grid), 'ocra-clear', {
+        coalesce: false,
+      });
       return;
     }
     if (action === 'ocra-basic-pulse') {
       module.initGrid?.();
       module.renderGrid?.(null);
       this.renderWorkspaceView();
-      this.publishProjectChange('ocra-basic-pulse');
+      this.publishModuleParameter(
+        module,
+        'grid',
+        structuredCloneSafe(module.grid),
+        'ocra-basic-pulse',
+        { coalesce: false }
+      );
       return;
     }
     if (action === 'ocra-step') {
       const result = module.runOrca?.();
       module.renderGrid?.(result?.act || null);
       this.logText(`ocra frame: ${module.title}`);
-      this.publishProjectChange('ocra-step');
+      this.publishModuleParameter(module, 'grid', structuredCloneSafe(module.grid), 'ocra-step');
       return;
     }
     if (action === 'ocra-toggle-cell') {
@@ -3191,7 +3767,6 @@ class V11PeerDAW {
       this.selectGridCell(data, { append: target.shiftKey, selected: true });
       this.writeGridCell(data, !this.readGridCellState(data));
       this.renderWorkspaceView();
-      this.publishProjectChange('ocra-toggle-cell');
       return;
     }
     if (action === 'arp-preview') {
@@ -4097,6 +4672,10 @@ class V11PeerDAW {
       ) {
         this.requestLocalSessionProject({ force: true });
       }
+      if (this.peerList.length > previousPeerCount) {
+        this.collaboration.broadcastCapabilities();
+        this.collaboration.replayPending();
+      }
     });
     this.peernet.addEventListener('storage', (e) => {
       document.querySelector('#storageStatus').textContent =
@@ -4429,6 +5008,289 @@ class V11PeerDAW {
     }
   }
 
+  hasLegacyCollaborationPeers() {
+    const subLobbyPeers = this.subLobby.snapshot?.().subLobbyPeers?.size || 0;
+    if (subLobbyPeers > 0) return true;
+    const compatible = new Set(this.collaboration.compatiblePeerIds());
+    if (this.localSessionBus) {
+      return [...this.localSessionPeers.keys()].some((clientId) => !compatible.has(clientId));
+    }
+    return this.peerList.length > 0 && compatible.size === 0;
+  }
+
+  scheduleCompatibilitySnapshot(reason = 'operation-fallback') {
+    if (!this.hasLegacyCollaborationPeers()) return;
+    window.clearTimeout(this.compatibilitySnapshotTimer);
+    this.compatibilitySnapshotTimer = window.setTimeout(() => {
+      if (!this.hasLegacyCollaborationPeers()) return;
+      this.publishLocalSessionProject(`compatibility:${reason}`);
+      this.subLobby.publishProjectChange(this.serializeRig(), `compatibility:${reason}`);
+    }, 320);
+  }
+
+  publishCollaborativeOperation(
+    domain,
+    action,
+    target = {},
+    payload = {},
+    { reason = `${domain}:${action}`, summary = '', coalesce = false } = {}
+  ) {
+    if (this.suppressProjectBroadcast) return null;
+    this.localProjectVersion += 1;
+    this.lastAppliedProjectStamp = {
+      version: this.localProjectVersion,
+      clientId: this.clientId,
+    };
+    this.localSyncStatus = 'published';
+    this.lastLocalSyncAt = Date.now();
+    const operation = this.collaboration.publish(domain, action, target, payload, {
+      summary,
+      coalesce,
+    });
+    recordAppliedOperation(this.operationReducerContext, operation);
+    this.scheduleCompatibilitySnapshot(reason);
+    this.renderLocalSyncStatus();
+    return operation;
+  }
+
+  renderWorkspacePreservingInteraction() {
+    const root = document.querySelector('#workspaceMainView');
+    const active = document.activeElement;
+    const descriptor =
+      active && root?.contains(active)
+        ? {
+            tag: active.tagName,
+            moduleInput: active.dataset?.moduleInput,
+            moduleId: active.dataset?.moduleId,
+            noteId: active.dataset?.noteId,
+            placementId: active.dataset?.placementId,
+            arrangementInput: active.dataset?.arrangementInput,
+            selectionStart: active.selectionStart,
+            selectionEnd: active.selectionEnd,
+          }
+        : null;
+    const scrollTop = root?.scrollTop || 0;
+    this.renderWorkspaceView();
+    if (root) root.scrollTop = scrollTop;
+    if (!descriptor) return;
+    const selectors = [];
+    if (descriptor.moduleInput) selectors.push(`[data-module-input="${CSS.escape(descriptor.moduleInput)}"]`);
+    if (descriptor.moduleId) selectors.push(`[data-module-id="${CSS.escape(descriptor.moduleId)}"]`);
+    if (descriptor.noteId) selectors.push(`[data-note-id="${CSS.escape(descriptor.noteId)}"]`);
+    if (descriptor.placementId)
+      selectors.push(`[data-placement-id="${CSS.escape(descriptor.placementId)}"]`);
+    if (descriptor.arrangementInput)
+      selectors.push(`[data-arrangement-input="${CSS.escape(descriptor.arrangementInput)}"]`);
+    const replacement = selectors.length ? root?.querySelector(selectors.join('')) : null;
+    replacement?.focus?.({ preventScroll: true });
+    if (
+      replacement &&
+      Number.isInteger(descriptor.selectionStart) &&
+      typeof replacement.setSelectionRange === 'function'
+    ) {
+      replacement.setSelectionRange(descriptor.selectionStart, descriptor.selectionEnd);
+    }
+  }
+
+  syncRemoteControl(operation = {}) {
+    const target = operation.target || {};
+    const value = operation.payload?.value;
+    const root = document.querySelector('#workspaceMainView');
+    if (!root) return;
+    const selectors = [];
+    if (target.moduleId) selectors.push(`[data-module-id="${CSS.escape(target.moduleId)}"]`);
+    if (target.parameter) selectors.push(`[data-param-key="${CSS.escape(target.parameter)}"]`);
+    if (target.field) selectors.push(`[data-module-input$="${CSS.escape(target.field)}"]`);
+    if (target.noteId) selectors.push(`[data-note-id="${CSS.escape(target.noteId)}"]`);
+    for (const input of root.querySelectorAll(selectors.length ? selectors.join('') : '.__never')) {
+      if ('value' in input && value !== undefined && document.activeElement !== input) input.value = value;
+      this.syncControlReadout(input);
+    }
+  }
+
+  applyCollaborationOperation(operation = {}, options = {}) {
+    const force = Boolean(options.force);
+    const reducerContext = force
+      ? { fieldVersions: new Map(), tombstones: this.operationReducerContext.tombstones }
+      : this.operationReducerContext;
+    const reduction = applyProjectOperation(this.serializeRig(), operation, reducerContext);
+    if (!['applied', 'duplicate'].includes(reduction.status)) return reduction;
+    if (reduction.status === 'duplicate') return reduction;
+    if (!force) this.operationReducerContext = reduction.context || reducerContext;
+
+    if (operation.domain === OPERATION_DOMAINS.BATCH) {
+      for (const nested of operation.payload?.operations || []) {
+        const normalized = {
+          ...nested,
+          actorId: nested.actorId || operation.actorId,
+          opId: nested.opId || `${operation.opId}:nested`,
+          sequence: nested.sequence || operation.sequence,
+          lamport: nested.lamport || operation.lamport,
+          baseRevision: nested.baseRevision ?? operation.baseRevision,
+        };
+        this.applyLiveCollaborationOperation(normalized);
+      }
+    } else this.applyLiveCollaborationOperation(operation);
+
+    this.localProjectVersion = Math.max(this.localProjectVersion, Number(operation.baseRevision || 0) + 1);
+    this.localSyncStatus = 'synced';
+    this.lastLocalSyncAt = Date.now();
+    const transport = options.meta?.transport || options.message?.transport || 'remote';
+    this.logText(
+      `${transport === 'local' ? 'local session' : transport === 'peernet' ? 'Peernet room' : 'remote'} project update: operation ${operation.domain}/${operation.action}`
+    );
+    this.renderLocalSyncStatus();
+    return reduction;
+  }
+
+  applyLiveCollaborationOperation(operation = {}) {
+    const target = operation.target || {};
+    const payload = operation.payload || {};
+    if (operation.domain === OPERATION_DOMAINS.MODULE_PARAMETER) {
+      const module = this.patchBay.modules.get(target.moduleId);
+      if (!module) return;
+      if (String(target.parameter).startsWith('sampleMetadata.')) {
+        module.setSampleMetadata?.({
+          [String(target.parameter).slice('sampleMetadata.'.length)]: structuredCloneSafe(
+            payload.value
+          ),
+        });
+      } else if (String(target.parameter).startsWith('grid.')) {
+        this.setObjectPathValue(module, target.parameter, payload.value);
+        module.renderGrid?.(null);
+      } else if (target.parameter === 'length' && typeof module.setLength === 'function') {
+        module.setLength(payload.value);
+      } else {
+        this.setSynthParam(module, target.parameter, payload.value);
+        if (typeof module.setParam === 'function') module.setParam(target.parameter, payload.value);
+        if (!String(target.parameter).includes('.')) module[target.parameter] = payload.value;
+      }
+      module.render?.();
+      this.syncRemoteControl(operation);
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.MIXER_MASTER) {
+      this.mixerState[target.field || 'masterVolume'] = payload.value;
+      this.runtime.setMasterVolume?.(this.mixerState.masterVolume);
+      this.syncRemoteControl(operation);
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.MIXER_CHANNEL) {
+      if (operation.action === 'unsolo-all') {
+        for (const channel of Object.values(this.mixerState.channels)) channel.solo = false;
+        for (const id of Object.keys(this.mixerState.channels)) this.applyMixerChannel(id);
+      } else {
+        const moduleId = target.channelId || target.moduleId;
+        const module = this.patchBay.modules.get(moduleId);
+        if (!module) return;
+        const channel = this.ensureMixerChannel(module);
+        channel[target.field] = structuredCloneSafe(payload.value);
+        this.applyMixerChannel(moduleId);
+      }
+      this.syncRemoteControl(operation);
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.CLOCK) {
+      const module = this.patchBay.modules.get(target.moduleId);
+      if (!module) return;
+      module.bpm = Math.max(40, Math.min(260, Number(payload.value || 120)));
+      module.render?.();
+      this.syncRemoteControl(operation);
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.CLIP_SLOT) {
+      const index = this.clipSlots.findIndex((slot) => slot.id === target.slotId);
+      if (operation.action === 'add' && index < 0) this.clipSlots.push(this.deserializeClipSlot(payload.slot));
+      else if (operation.action === 'delete' && index >= 0) this.clipSlots.splice(index, 1);
+      else if (index >= 0 && operation.action === 'launch') {
+        this.clipSlots[index].launchBeat = Number(payload.beat);
+        this.clipSlots[index].stopBeat = null;
+      } else if (index >= 0 && operation.action === 'stop') {
+        this.clipSlots[index].stopBeat = Number(payload.beat);
+      } else if (index >= 0 && target.field) {
+        this.clipSlots[index][target.field] = structuredCloneSafe(payload.value);
+      }
+      if (['clips', 'session'].includes(this.workspaceView)) this.renderWorkspacePreservingInteraction();
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.NOTE) {
+      const module = this.patchBay.modules.get(target.moduleId);
+      if (!module) return;
+      module.notes ||= [];
+      const index = module.notes.findIndex((note) => note.id === target.noteId);
+      if (operation.action === 'add' && index < 0) module.notes.push(structuredCloneSafe(payload.note));
+      if (operation.action === 'update' && index >= 0)
+        Object.assign(module.notes[index], structuredCloneSafe(payload.patch || {}));
+      if (operation.action === 'delete' && index >= 0) module.notes.splice(index, 1);
+      if (operation.action === 'clear') module.notes = [];
+      module.notes.sort((a, b) => a.beat - b.beat || a.note.localeCompare(b.note));
+      module.render?.();
+      if (this.workspaceView === 'module' && this.focusedModuleId === module.id)
+        this.renderWorkspacePreservingInteraction();
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.SEQUENCER_STEP) {
+      const module = this.patchBay.modules.get(target.moduleId);
+      if (!module) return;
+      if (target.rowId !== undefined && target.stepIndex !== undefined) {
+        module.setStep?.(
+          target.rowId,
+          Number(target.stepIndex),
+          operation.action === 'clear'
+            ? { enabled: false, velocity: 0.8, microTiming: 0 }
+            : payload.patch || payload.step || {}
+        );
+      }
+      if (this.workspaceView === 'module' && this.focusedModuleId === module.id)
+        this.renderWorkspacePreservingInteraction();
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.ARRANGEMENT_PLACEMENT) {
+      const index = this.arrangement.clips.findIndex(
+        (placement) => placement.placementId === target.placementId
+      );
+      if (operation.action === 'add' && index < 0) {
+        const placement = payload.placement || {};
+        this.arrangement.placeClip({
+          placementId: placement.placementId,
+          clip: placement.clip,
+          startBeat: placement.startBeat,
+          trackId: placement.trackId,
+        });
+      } else if (operation.action === 'delete' && index >= 0) {
+        this.arrangement.clips.splice(index, 1);
+      } else if (operation.action === 'update' && index >= 0) {
+        const patch = structuredCloneSafe(payload.patch || {});
+        if (patch.clip) {
+          this.arrangement.clips[index].clip = new Clip(patch.clip);
+          delete patch.clip;
+        }
+        Object.assign(this.arrangement.clips[index], patch);
+      }
+      if (this.workspaceView === 'arrangement') this.renderWorkspacePreservingInteraction();
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.ARRANGEMENT_LOOP) {
+      this.arrangement.loopStartBeat = Number(payload.startBeat);
+      this.arrangement.loopEndBeat = Number(payload.endBeat);
+      if (this.workspaceView === 'arrangement') this.renderWorkspacePreservingInteraction();
+      return;
+    }
+    if (operation.domain === OPERATION_DOMAINS.MULTISAMPLER_ZONE) {
+      const module = this.patchBay.modules.get(target.moduleId);
+      if (!module) return;
+      module.zones ||= [];
+      const index = module.zones.findIndex((zone) => zone.id === target.zoneId);
+      if (operation.action === 'add' && index < 0) module.zones.push(structuredCloneSafe(payload.zone));
+      if (operation.action === 'update' && index >= 0)
+        Object.assign(module.zones[index], structuredCloneSafe(payload.patch || {}));
+      if (operation.action === 'delete' && index >= 0) module.zones.splice(index, 1);
+      module.render?.();
+      if (this.workspaceView === 'module' && this.focusedModuleId === module.id)
+        this.renderWorkspacePreservingInteraction();
+    }
+  }
+
   publishProjectChange(reason = 'local-change') {
     if (this.suppressProjectBroadcast) return;
     this.subLobby.publishProjectChange(this.serializeRig(), reason);
@@ -4436,6 +5298,7 @@ class V11PeerDAW {
   }
 
   async rebuildRigFromProject(project) {
+    project = normalizeProjectStableIds(project || {});
     const wasSuppressed = this.suppressProjectBroadcast;
     this.suppressProjectBroadcast = true;
     try {

@@ -200,9 +200,20 @@ export class OperationJournal {
     this.persist();
   }
 
-  setCheckpoint({ revision = 0, vector = {}, at = this.now() } = {}) {
+  setCheckpoint({
+    revision = 0,
+    vector = {},
+    at = this.now(),
+    status = 'checkpoint',
+    summary = '',
+  } = {}) {
     this.checkpoint = { revision: Number(revision || 0), vector: { ...vector }, at: Number(at) };
-    this.addActivity({ type: 'checkpoint', status: 'recovered', summary: `Snapshot checkpoint ${this.checkpoint.revision}`, at: Number(at) });
+    this.addActivity({
+      type: 'checkpoint',
+      status,
+      summary: summary || `Snapshot checkpoint ${this.checkpoint.revision}`,
+      at: Number(at),
+    });
     this.compact({ force: true });
     this.persist();
   }

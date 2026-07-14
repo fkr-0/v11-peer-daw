@@ -8,6 +8,7 @@ import {
   createCapabilitiesMessage,
   createOperationAck,
   createOperationMessage,
+  operationFieldKey,
   summarizeOperation,
   validateOperation,
 } from './project-operations.js';
@@ -80,6 +81,13 @@ export class CollaborationEngine {
       operation,
       at: this.now(),
     });
+    if (options.coalesce) {
+      const fieldKey = operationFieldKey(operation);
+      for (const entry of this.journal.pendingOperations()) {
+        if (entry.operation?.opId === operation.opId) continue;
+        if (operationFieldKey(entry.operation) === fieldKey) this.journal.discard(entry.operation.opId);
+      }
+    }
     this.journal.enqueue(operation, {
       peers,
       messageId: message.messageId,
@@ -179,7 +187,20 @@ export class CollaborationEngine {
   retryDue() {
     const due = this.journal.dueOperations(this.now());
     for (const entry of due) {
-      if (entry.attempts >= RETRY_DELAYS.length + 1) continue;
+      if (entry.attempts >= RETRY_DELAYS.length + 1) {
+        entry.status = 'rejected';
+        entry.lastError = 'retry-exhausted';
+        entry.updatedAt = this.now();
+        this.journal.addActivity({
+          type: 'delivery',
+          status: 'rejected',
+          opId: entry.operation.opId,
+          summary: `${entry.summary} · delivery retries exhausted`,
+          at: entry.updatedAt,
+        });
+        this.journal.persist();
+        continue;
+      }
       const message = createOperationMessage({
         clientId: this.actorId,
         sessionCode: this.sessionCode,
@@ -211,9 +232,17 @@ export class CollaborationEngine {
     return count;
   }
 
-  checkpoint({ revision = this.getRevision(), vector = {} } = {}) {
-    this.journal.setCheckpoint({ revision, vector, at: this.now() });
-    this.lastRecoveredAt = this.now();
+  checkpoint({ revision = this.getRevision(), vector = {}, recovered = false } = {}) {
+    this.journal.setCheckpoint({
+      revision,
+      vector,
+      at: this.now(),
+      status: recovered ? 'recovered' : 'checkpoint',
+      summary: recovered
+        ? `Snapshot recovery completed at revision ${revision}`
+        : `Snapshot checkpoint ${revision}`,
+    });
+    if (recovered) this.lastRecoveredAt = this.now();
     this.emitChange();
   }
 
@@ -243,13 +272,15 @@ export class CollaborationEngine {
 
   diagnostics() {
     const journal = this.journal.diagnostics();
+    const recentlyRecovered =
+      this.lastRecoveredAt > 0 && this.now() - this.lastRecoveredAt < 15000;
     const state = journal.conflictCount
       ? 'conflict'
       : journal.pendingCount
-        ? journal.counts.retrying
+        ? journal.counts.retrying || journal.counts.rejected
           ? 'retrying'
           : 'pending'
-        : this.lastRecoveredAt
+        : recentlyRecovered
           ? 'recovered'
           : 'synced';
     return {

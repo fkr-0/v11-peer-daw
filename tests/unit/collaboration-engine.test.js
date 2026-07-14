@@ -112,4 +112,68 @@ describe('CollaborationEngine', () => {
     expect(restored.replayPending()).toBe(1);
     expect(restoredSent[0].operation.opId).toBe(operation.opId);
   });
+
+  test('coalesces repeated pending edits to the same field', () => {
+    const engine = new CollaborationEngine({
+      actorId: 'alpha',
+      sessionCode: 'ROOM',
+      storage: new MemoryJournalStorage(),
+      send: () => [{ delivered: false, peerCount: 0 }],
+      setIntervalFn: null,
+      clearIntervalFn: null,
+    });
+
+    engine.publish(
+      OPERATION_DOMAINS.MODULE_PARAMETER,
+      'set',
+      { moduleId: 'synth', parameter: 'cutoff' },
+      { value: 1200 },
+      { coalesce: true }
+    );
+    const latest = engine.publish(
+      OPERATION_DOMAINS.MODULE_PARAMETER,
+      'set',
+      { moduleId: 'synth', parameter: 'cutoff' },
+      { value: 2400 },
+      { coalesce: true }
+    );
+
+    expect(engine.journal.pendingOperations().map((entry) => entry.operation.opId)).toEqual([
+      latest.opId,
+    ]);
+  });
+
+  test('marks retry exhaustion and distinguishes normal checkpoints from recovery', () => {
+    let now = 100;
+    const engine = new CollaborationEngine({
+      actorId: 'alpha',
+      sessionCode: 'ROOM',
+      storage: new MemoryJournalStorage(),
+      now: () => now,
+      send: () => [{ delivered: false, peerCount: 0 }],
+      setIntervalFn: null,
+      clearIntervalFn: null,
+    });
+    const operation = engine.publish(
+      OPERATION_DOMAINS.CLOCK,
+      'set-bpm',
+      { moduleId: 'clock' },
+      { value: 132 }
+    );
+    for (let index = 0; index < 6; index += 1) {
+      now += 10000;
+      engine.retryDue();
+    }
+    expect(engine.journal.entries.get(operation.opId)).toMatchObject({
+      status: 'rejected',
+      lastError: 'retry-exhausted',
+    });
+    expect(engine.diagnostics().state).toBe('retrying');
+
+    engine.journal.discard(operation.opId);
+    engine.checkpoint({ revision: 3 });
+    expect(engine.diagnostics().state).toBe('synced');
+    engine.checkpoint({ revision: 4, recovered: true });
+    expect(engine.diagnostics().state).toBe('recovered');
+  });
 });

@@ -4,6 +4,39 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] - 2026-07-14
+
+### Added
+
+- Collaboration protocol 2 with typed project operations, capability negotiation, targeted acknowledgements, and protocol-1 snapshot fallback.
+- A persistent per-room operation journal with pending, partially acknowledged, retrying, rejected, applied, and checkpoint state.
+- Bounded retry/backoff, reconnect replay, same-field operation coalescing, duplicate suppression, checkpoint compaction, and recovery export.
+- Deterministic pure reducers for module parameters, mixer state, tempo, clip slots, notes, sequencer steps, arrangement placements/loops, multisampler zones, and atomic batches.
+- Stable IDs and legacy migration for arrangement placements, clip slots, notes, and multisampler zones.
+- A Sync Center with Overview, Pending Delivery, Activity, Conflicts, and Recovery sections.
+- Compact `SYNCED`, `N PENDING`, `RECONNECTING`, `N CONFLICTS`, and `RECOVERED` status states in the transport bar.
+- Command-center actions for opening Sync Center, retrying pending edits, and requesting a recovery snapshot.
+- Browser coverage for incremental two-client convergence, zero-rig-rebuild scalar updates, payload-size reduction, persisted reload replay, and protocol-v2 simultaneous edits.
+
+### Changed
+
+- Frequent mixer, synth/effect/sampler, tempo, clip, piano-roll, grid, sequencer, OCRA, arrangement, and multisampler edits now publish typed operations rather than complete project snapshots.
+- Whole-project snapshots remain the compatibility, bootstrap, module/graph topology, binary sample, import, and recovery mechanism.
+- Same-field scalar conflicts resolve deterministically by Lamport clock and actor ID while unrelated fields merge independently.
+- Local actor identity persists for the lifetime of a browser tab so pending operations survive reload without conflating separate collaborators.
+- Remote operations update live module/runtime state directly and preserve the focused editor, selection, and workspace scroll where possible.
+- Legacy project imports receive additive stable entity IDs without mutating the input document or breaking 1.3-era readers.
+
+### Fixed
+
+- Concurrent edits to different controls no longer replace one another through whole-rig last-writer-wins snapshots.
+- Duplicate delivery through local and Peernet transports no longer mutates musical state twice.
+- Pending edits no longer disappear across reload or a short disconnect.
+- Older note, placement, or zone additions cannot resurrect entities deleted by a newer operation.
+- Normal bootstrap checkpoints are no longer mislabeled as recovery events.
+- Capability detection no longer mistakes one logical peer exposed through multiple transport roles for an incompatible client.
+- Repeated continuous-control input is coalesced in the pending outbox instead of growing an unbounded series of obsolete field edits.
+
 ## [1.3.0] - 2026-07-14
 
 ### Added
@@ -109,6 +142,7 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 
 - Initial standalone V11 Peer DAW repository and modular collaborative workstation baseline.
 
+[1.4.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.0...v1.1.1
