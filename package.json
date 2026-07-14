@@ -1,6 +1,6 @@
 {
   "name": "@v11/peer-daw",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "V11 Peer DAW - Modular peer-to-peer audio workstation with collaborative sessions",
   "type": "module",
   "private": true,

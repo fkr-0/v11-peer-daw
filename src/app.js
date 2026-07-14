@@ -69,6 +69,10 @@ class V11PeerDAW {
     this.graphSync = null;
     this.patchCanvas = null;
     this.workspacePreferences = new WorkspacePreferences();
+    this.layoutState = { left: true, right: true, focus: false };
+    this.surfaceState = { patch: true, rack: true };
+    this.toastTimers = new Set();
+    this.modifierState = { control: false, meta: false };
     this.clock = null;
     this.mixer = null;
     this.focusedModuleId = null;
@@ -96,6 +100,7 @@ class V11PeerDAW {
       this.normalizeSessionCode(this.urlParams.get('session')) || 'V11-OPEN-STUDIO';
     this.peerList = [];
     this.workspaceView = 'session';
+    this.lastRenderedWorkspaceView = null;
     this.suppressProjectBroadcast = false;
     this.clientId = `v11-client-${Math.random().toString(36).slice(2, 10)}`;
     this.projectSync = new ProjectSyncState({
@@ -144,6 +149,146 @@ class V11PeerDAW {
       autoCreateWhenAlone: false,
       autoJoinOffers: true,
     });
+  }
+
+  showToast(message, { tone = 'info', timeout = 2400 } = {}) {
+    const region = document.querySelector('#toastRegion');
+    if (!region || !message) return null;
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.dataset.tone = tone;
+    toast.textContent = message;
+    region.appendChild(toast);
+    while (region.children.length > 3) region.firstElementChild?.remove();
+    const timer = window.setTimeout(() => {
+      toast.remove();
+      this.toastTimers.delete(timer);
+    }, timeout);
+    this.toastTimers.add(timer);
+    return toast;
+  }
+
+  bindLayoutControls() {
+    document
+      .querySelector('#btnToggleLeftPanel')
+      ?.addEventListener('click', () => this.togglePanel('left'));
+    document
+      .querySelector('#btnToggleRightPanel')
+      ?.addEventListener('click', () => this.togglePanel('right'));
+    document
+      .querySelector('#btnFocusMode')
+      ?.addEventListener('click', () => this.toggleFocusMode());
+    document
+      .querySelector('#btnWorkspaceFocus')
+      ?.addEventListener('click', () => this.toggleFocusMode());
+    document
+      .querySelector('#btnTogglePatchCanvas')
+      ?.addEventListener('click', () => this.toggleSurface('patch'));
+    document
+      .querySelector('#btnToggleRack')
+      ?.addEventListener('click', () => this.toggleSurface('rack'));
+
+    document.addEventListener('keydown', (event) => {
+      const active = document.activeElement;
+      if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
+      if (event.ctrlKey && event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'l' || key === 'r' || key === 'f') {
+          event.preventDefault();
+          if (key === 'l') this.togglePanel('left');
+          if (key === 'r') this.togglePanel('right');
+          if (key === 'f') this.toggleFocusMode();
+        }
+        return;
+      }
+      if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+      const index = Number(event.key) - 1;
+      const views = ['session', 'chains', 'clips', 'samples', 'arrangement', 'mixer', 'module'];
+      if (index < 0 || index >= views.length) return;
+      event.preventDefault();
+      this.setWorkspaceView(views[index], { focusTab: true });
+    });
+  }
+
+  restoreLayoutState() {
+    this.layoutState = this.workspacePreferences.restoreLayoutState(this.layoutState);
+    this.applyLayoutState({ persist: false });
+  }
+
+  applyLayoutState({ persist = true, announce = false } = {}) {
+    const shell = document.querySelector('.shell');
+    if (!shell) return;
+    const leftVisible = this.layoutState.focus ? false : this.layoutState.left;
+    const rightVisible = this.layoutState.focus ? false : this.layoutState.right;
+    shell.classList.toggle('layout-left-collapsed', !leftVisible);
+    shell.classList.toggle('layout-right-collapsed', !rightVisible);
+    shell.classList.toggle('layout-focus-mode', this.layoutState.focus);
+    document.querySelector('#btnToggleLeftPanel')?.setAttribute('aria-pressed', String(leftVisible));
+    document.querySelector('#btnToggleRightPanel')?.setAttribute('aria-pressed', String(rightVisible));
+    for (const selector of ['#btnFocusMode', '#btnWorkspaceFocus']) {
+      document.querySelector(selector)?.setAttribute('aria-pressed', String(this.layoutState.focus));
+    }
+    if (persist) this.layoutState = this.workspacePreferences.saveLayoutState(this.layoutState);
+    if (announce) {
+      const label = this.layoutState.focus
+        ? 'Focus mode enabled'
+        : `Panels: ${leftVisible ? 'setup on' : 'setup off'} · ${rightVisible ? 'monitor on' : 'monitor off'}`;
+      this.showToast(label, { tone: 'success' });
+    }
+  }
+
+  togglePanel(side) {
+    if (!['left', 'right'].includes(side)) return;
+    if (this.layoutState.focus) {
+      this.layoutState.focus = false;
+      this.layoutState[side] = true;
+    } else {
+      this.layoutState[side] = !this.layoutState[side];
+    }
+    this.applyLayoutState({ announce: true });
+  }
+
+  toggleFocusMode() {
+    this.layoutState.focus = !this.layoutState.focus;
+    this.applyLayoutState({ announce: true });
+  }
+
+  restoreSurfaceStates() {
+    this.surfaceState = this.workspacePreferences.restoreSurfaceStates(this.surfaceState);
+    this.applySurfaceStates({ persist: false });
+  }
+
+  applySurfaceStates({ persist = true } = {}) {
+    const surfaces = {
+      patch: ['#patchSurface', '#btnTogglePatchCanvas'],
+      rack: ['#rackSurface', '#btnToggleRack'],
+    };
+    for (const [name, [surfaceSelector, buttonSelector]] of Object.entries(surfaces)) {
+      const expanded = this.surfaceState[name] !== false;
+      const surface = document.querySelector(surfaceSelector);
+      const button = document.querySelector(buttonSelector);
+      if (surface) surface.dataset.collapsed = String(!expanded);
+      if (button) {
+        button.setAttribute('aria-expanded', String(expanded));
+        button.textContent = expanded ? 'Collapse' : 'Expand';
+      }
+    }
+    if (persist) this.surfaceState = this.workspacePreferences.saveSurfaceStates(this.surfaceState);
+  }
+
+  toggleSurface(name) {
+    if (!Object.hasOwn(this.surfaceState, name)) return;
+    this.surfaceState[name] = !this.surfaceState[name];
+    this.applySurfaceStates();
+    this.showToast(`${name === 'patch' ? 'Patch canvas' : 'Module rack'} ${this.surfaceState[name] ? 'expanded' : 'collapsed'}`);
+  }
+
+  resetWorkspaceLayout() {
+    this.layoutState = { left: true, right: true, focus: false };
+    this.surfaceState = { patch: true, rack: true };
+    this.applyLayoutState();
+    this.applySurfaceStates();
+    this.showToast('Workspace layout reset', { tone: 'success' });
   }
 
   renderLocalSyncStatus() {
@@ -388,6 +533,9 @@ class V11PeerDAW {
     this.createStarfield();
     this.bindExampleProjects();
     this.bindChrome();
+    this.bindLayoutControls();
+    this.restoreLayoutState();
+    this.restoreSurfaceStates();
     this.bindCommandCenter();
     this.bindModuleSearch();
     this.bindTransportBar();
@@ -625,28 +773,47 @@ class V11PeerDAW {
     try {
       await navigator.clipboard?.writeText?.(invite);
       this.logText(`session invite copied: ${this.sessionCode || this.defaultSessionCode}`);
+      this.showToast('Session invite copied', { tone: 'success' });
     } catch {
       window.prompt?.('Copy session invite', invite);
       this.logText('session invite ready for manual copy');
+      this.showToast('Invite ready for manual copy', { tone: 'warning' });
     }
   }
 
   bindChrome() {
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Control') this.modifierState.control = true;
+      if (event.key === 'Meta') this.modifierState.meta = true;
+    });
+    document.addEventListener('keyup', (event) => {
+      if (event.key === 'Control') this.modifierState.control = false;
+      if (event.key === 'Meta') this.modifierState.meta = false;
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) return;
+      this.modifierState.control = false;
+      this.modifierState.meta = false;
+    });
+
     document.querySelector('#btnBootAudio').addEventListener('click', async () => {
       await this.runtime.init();
       this.statusEl.textContent = `audio: ${this.runtime.context.state}`;
       await this.startAudioModules();
+      this.showToast(`Audio ${this.runtime.context.state}`, { tone: 'success' });
     });
 
     document.querySelector('#btnStart').addEventListener('click', async () => {
       await this.runtime.init();
       await this.startAudioModules();
       this.clock?.start(this.runtime.context);
+      this.showToast('Clock started', { tone: 'success' });
     });
 
     document.querySelector('#btnStop').addEventListener('click', () => {
       this.clock?.stop();
       this.statusEl.textContent = 'audio: stopped';
+      this.showToast('Clock stopped');
     });
 
     document.addEventListener('keydown', async (e) => {
@@ -674,7 +841,10 @@ class V11PeerDAW {
       ?.addEventListener('click', () => this.copySessionInvite());
     document
       .querySelector('#btnSyncSession')
-      ?.addEventListener('click', () => this.requestLocalSessionProject({ force: true }));
+      ?.addEventListener('click', () => {
+        this.requestLocalSessionProject({ force: true });
+        this.showToast('Room synchronization requested');
+      });
     document
       .querySelector('#btnJoinSession')
       ?.addEventListener('click', () =>
@@ -739,6 +909,7 @@ class V11PeerDAW {
       const module = factory();
       await this.addModule(module, { autoConnectAudio: true });
       this.autopatch(module);
+      this.showToast(`${module.title} added`, { tone: 'success' });
     });
 
     // Patch canvas controls
@@ -753,6 +924,7 @@ class V11PeerDAW {
       this.renderRoutes();
       this.renderPatchCanvas();
       this.logText('All routes cleared');
+      this.showToast('All routes cleared', { tone: 'warning' });
       this.publishProjectChange('routes-cleared');
     });
 
@@ -884,6 +1056,60 @@ class V11PeerDAW {
         keywords: 'room collaborate share code',
         priority: 15,
         run: () => document.querySelector('#btnCreateSession')?.click(),
+      },
+      {
+        id: 'layout:focus',
+        title: this.layoutState.focus ? 'Exit Focus Mode' : 'Enter Focus Mode',
+        detail: 'Toggle a distraction-free central editing workspace',
+        kind: 'layout',
+        keywords: 'focus fullscreen hide panels workspace',
+        priority: 17,
+        run: () => this.toggleFocusMode(),
+      },
+      {
+        id: 'layout:left',
+        title: `${!this.layoutState.focus && this.layoutState.left ? 'Hide' : 'Show'} Setup Panel`,
+        detail: 'Toggle modules, session, samples, examples, and project controls',
+        kind: 'layout',
+        keywords: 'left sidebar setup modules session',
+        priority: 16,
+        run: () => this.togglePanel('left'),
+      },
+      {
+        id: 'layout:right',
+        title: `${!this.layoutState.focus && this.layoutState.right ? 'Hide' : 'Show'} Monitor Panel`,
+        detail: 'Toggle mixer overview, routes, and packet monitor',
+        kind: 'layout',
+        keywords: 'right sidebar inspector mixer routes monitor',
+        priority: 16,
+        run: () => this.togglePanel('right'),
+      },
+      {
+        id: 'layout:patch',
+        title: `${this.surfaceState.patch ? 'Collapse' : 'Expand'} Patch Canvas`,
+        detail: 'Reduce or restore the visual routing surface',
+        kind: 'layout',
+        keywords: 'patch canvas collapse expand surface',
+        priority: 13,
+        run: () => this.toggleSurface('patch'),
+      },
+      {
+        id: 'layout:rack',
+        title: `${this.surfaceState.rack ? 'Collapse' : 'Expand'} Module Rack`,
+        detail: 'Reduce or restore native module controls below the workspace',
+        kind: 'layout',
+        keywords: 'module rack collapse expand surface',
+        priority: 13,
+        run: () => this.toggleSurface('rack'),
+      },
+      {
+        id: 'layout:reset',
+        title: 'Reset Workspace Layout',
+        detail: 'Show both panels and expand the patch canvas and module rack',
+        kind: 'layout',
+        keywords: 'reset restore panels surfaces default layout',
+        priority: 11,
+        run: () => this.resetWorkspaceLayout(),
       },
       {
         id: 'project:snapshot',
@@ -1194,6 +1420,20 @@ class V11PeerDAW {
   bindWorkspaceViews() {
     document.querySelectorAll('[data-workspace-view]').forEach((button) => {
       button.addEventListener('click', () => this.setWorkspaceView(button.dataset.workspaceView));
+    });
+    const tabs = [...document.querySelectorAll('.workspace-tab[data-workspace-view]')];
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const nextIndex =
+          event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? tabs.length - 1
+              : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        this.setWorkspaceView(tabs[nextIndex].dataset.workspaceView, { focusTab: true });
+      });
     });
     const workspace = document.querySelector('#workspaceMainView');
     workspace?.addEventListener('click', (event) => {
@@ -1579,7 +1819,70 @@ class V11PeerDAW {
     this.publishProjectChange('grid-duplicate');
   }
 
-  setWorkspaceView(view) {
+  workspaceViewMetadata(view = this.workspaceView) {
+    const metadata = {
+      session: {
+        eyebrow: 'Collaboration',
+        title: 'Session',
+        description: 'Room, transport, project synchronization, and rig health.',
+        shortcut: 'Ctrl 1',
+      },
+      chains: {
+        eyebrow: 'Routing',
+        title: 'Signal Flow',
+        description: 'Trace module chains, inspect unpatched devices, and follow audio direction.',
+        shortcut: 'Ctrl 2',
+      },
+      clips: {
+        eyebrow: 'Performance',
+        title: 'Clips',
+        description: 'Launch, stop, edit, and place clip slots without leaving the performance view.',
+        shortcut: 'Ctrl 3',
+      },
+      samples: {
+        eyebrow: 'Library',
+        title: 'Samples',
+        description: 'Review project sample availability, upload replacements, and assign files.',
+        shortcut: 'Ctrl 4',
+      },
+      arrangement: {
+        eyebrow: 'Timeline',
+        title: 'Arrangement',
+        description: 'Place, move, duplicate, loop, and preview clips on the song timeline.',
+        shortcut: 'Ctrl 5',
+      },
+      mixer: {
+        eyebrow: 'Mix',
+        title: 'Mixer',
+        description: 'Balance channels, mute or solo parts, and control the master output.',
+        shortcut: 'Ctrl 6',
+      },
+      module: {
+        eyebrow: 'Editor',
+        title: this.patchBay.modules.get(this.focusedModuleId)?.title || 'Focused Module',
+        description: 'Edit the selected module with its purpose-built controls and workflow.',
+        shortcut: 'Ctrl 7',
+      },
+    };
+    return metadata[view] || metadata.session;
+  }
+
+  renderWorkspaceContext() {
+    const metadata = this.workspaceViewMetadata();
+    const values = {
+      workspaceEyebrow: metadata.eyebrow,
+      workspaceTitle: metadata.title,
+      workspaceDescription: metadata.description,
+      workspaceContextMeta: metadata.shortcut,
+    };
+    for (const [id, value] of Object.entries(values)) {
+      const node = document.querySelector(`#${id}`);
+      if (node) node.textContent = value;
+    }
+  }
+
+  setWorkspaceView(view, { announce = true, focusTab = false } = {}) {
+    const previous = this.workspaceView;
     this.workspaceView = view || 'session';
     document.querySelectorAll('[data-workspace-view]').forEach((button) => {
       const active = button.dataset.workspaceView === this.workspaceView;
@@ -1588,9 +1891,18 @@ class V11PeerDAW {
       if (active) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
+    document.querySelectorAll('.workspace-tab[data-workspace-view]').forEach((button) => {
+      const active = button.dataset.workspaceView === this.workspaceView;
+      button.tabIndex = active ? 0 : -1;
+      if (active && focusTab) button.focus({ preventScroll: true });
+    });
     this.workspacePreferences.saveWorkspaceView(this.workspaceView);
     this.refreshFocusedModuleCard();
+    this.renderWorkspaceContext();
     this.renderWorkspaceView();
+    if (announce && previous !== this.workspaceView) {
+      this.showToast(`${this.workspaceViewMetadata().title} view`);
+    }
   }
 
   refreshFocusedModuleCard() {
@@ -1608,11 +1920,12 @@ class V11PeerDAW {
 
   restoreWorkspaceView() {
     const saved = this.workspacePreferences.restoreWorkspaceView();
-    if (saved) this.setWorkspaceView(saved);
+    if (saved) this.setWorkspaceView(saved, { announce: false });
+    else this.renderWorkspaceContext();
   }
 
   restoreDrawerStates() {
-    const drawers = [...document.querySelectorAll('.sidebar-drawer')];
+    const drawers = [...document.querySelectorAll('.sidebar-drawer, .ui-drawer')];
     this.workspacePreferences.restoreDrawerStates(drawers);
     drawers.forEach((drawer) => {
       drawer.addEventListener('toggle', () => this.saveDrawerStates());
@@ -1620,7 +1933,9 @@ class V11PeerDAW {
   }
 
   saveDrawerStates() {
-    this.workspacePreferences.saveDrawerStates([...document.querySelectorAll('.sidebar-drawer')]);
+    this.workspacePreferences.saveDrawerStates([
+      ...document.querySelectorAll('.sidebar-drawer, .ui-drawer'),
+    ]);
   }
 
   scheduleRender() {
@@ -1952,8 +2267,14 @@ class V11PeerDAW {
       event.preventDefault();
       return;
     }
+    const copyModifier = Boolean(
+      event.ctrlKey ||
+        event.metaKey ||
+        this.modifierState.control ||
+        this.modifierState.meta
+    );
     let dragIndex = index;
-    if (event.ctrlKey || event.metaKey) {
+    if (copyModifier) {
       this.duplicateArrangementPlacement(index);
       dragIndex = this.arrangement.clips.length - 1;
     }
@@ -1970,7 +2291,7 @@ class V11PeerDAW {
       lengthBeats: this.arrangementLengthBeats(),
       rectWidth: Math.max(1, rect?.width || 1),
       snap: event.shiftKey ? 4 : event.altKey ? 0.25 : 1,
-      copied: event.ctrlKey || event.metaKey,
+      copied: copyModifier,
     };
     try {
       if (clip.isConnected && typeof clip.setPointerCapture === 'function')
@@ -3198,8 +3519,16 @@ class V11PeerDAW {
   }
 
   renderWorkspaceView() {
+    this.renderWorkspaceContext();
     const root = document.querySelector('#workspaceMainView');
     if (!root) return;
+    const preserveScroll = this.lastRenderedWorkspaceView === this.workspaceView;
+    const previousScrollTop = preserveScroll ? root.scrollTop : 0;
+    const renderedView = this.workspaceView;
+    this.lastRenderedWorkspaceView = renderedView;
+    queueMicrotask(() => {
+      if (this.workspaceView === renderedView && root.isConnected) root.scrollTop = previousScrollTop;
+    });
     const modules = this.workspaceModules();
     const activeSession = this.peernet.sessions?.getActiveSession?.();
     const code = activeSession?.code || this.sessionCode || this.defaultSessionCode;
@@ -3884,6 +4213,7 @@ class V11PeerDAW {
       if (module.output?.gain) module.output.gain.value = Number(slider.value) / 100;
     });
     this.mixerStripEl.appendChild(strip);
+    this.updateInspectorCounts();
   }
 
   renderRoutes() {
@@ -3926,6 +4256,20 @@ class V11PeerDAW {
     document.querySelector('#routeCount').textContent =
       `${this.patchBay.routes.length} packet / ${audioRouteCount} audio routes`;
     this.updateTransportStats();
+    this.updateInspectorCounts();
+  }
+
+  updateInspectorCounts() {
+    const audioRouteCount = this.routingGraph.edges.filter((edge) => edge.type === 'audio').length;
+    const values = {
+      inspectorMixerCount: this.mixerStripEl?.children?.length || 0,
+      inspectorRouteCount: this.patchBay.routes.length + audioRouteCount,
+      inspectorLogCount: this.logEl?.children?.length || 0,
+    };
+    for (const [id, value] of Object.entries(values)) {
+      const node = document.querySelector(`#${id}`);
+      if (node) node.textContent = String(value);
+    }
   }
 
   handlePatchGraphChange() {
@@ -3977,6 +4321,7 @@ class V11PeerDAW {
     row.textContent = `${from}:${outputId} :: ${packet.kind}/${packet.type}${packet.note ? ` ${packet.note}` : ''}`;
     this.logEl.prepend(row);
     while (this.logEl.children.length > 50) this.logEl.lastChild.remove();
+    this.updateInspectorCounts();
   }
 
   logText(text) {
@@ -3985,6 +4330,7 @@ class V11PeerDAW {
     row.textContent = text;
     this.logEl.prepend(row);
     while (this.logEl.children.length > 30) this.logEl.lastChild.remove();
+    this.updateInspectorCounts();
   }
 
   syncAudioGraph() {

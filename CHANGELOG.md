@@ -4,6 +4,34 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2026-07-14
+
+### Added
+
+- A persistent focus mode that expands the central editor and temporarily hides setup and monitoring panels.
+- Independent setup-panel and monitor-panel controls, available from the top bar, keyboard shortcuts, and command center.
+- Collapsible Patch Canvas and Module Rack surfaces with remembered expansion state.
+- Context headers for every workspace view with a clear purpose, current title, and keyboard shortcut.
+- Arrow-key tab navigation plus direct `Ctrl+1` through `Ctrl+7` workspace switching.
+- Collapsible Mixer, Routes, and Packet Monitor inspector drawers with live item counts.
+- Non-blocking toast feedback for transport, synchronization, layout, module, route, and clipboard actions.
+- Command-center actions for all panel, focus, surface, and layout-reset operations.
+
+### Changed
+
+- The central workspace now uses responsive panel-width variables and can occupy the full application width.
+- Session controls use explicit action names such as `RECONNECT`, `NEW SESSION`, and `SNAPSHOT`.
+- Workspace tabs remain visible while scrolling and expose roving-tab accessibility semantics.
+- Patch Canvas and Module Rack headers now explain their purpose and group related controls more clearly.
+- The right inspector uses compact persistent drawers instead of one long undifferentiated column.
+- Mobile and constrained-height layouts preserve the full command and workspace navigation without horizontal overflow.
+
+### Fixed
+
+- Saved closed drawer states now restore as closed instead of only restoring drawers saved as open.
+- The inspector no longer enforces a width that can overflow narrow layouts.
+- Focused-module view titles now update when the selected module changes.
+
 ## [1.2.0] - 2026-07-14
 
 ### Added
@@ -81,6 +109,7 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 
 - Initial standalone V11 Peer DAW repository and modular collaborative workstation baseline.
 
+[1.3.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.0.0...v1.1.0

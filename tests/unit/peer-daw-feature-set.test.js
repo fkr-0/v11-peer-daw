@@ -178,6 +178,32 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(app).toContain('switchSessionCode');
   });
 
+  test('workspace chrome exposes persistent focus, panel, surface, and context controls', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+
+    for (const id of [
+      'btnToggleLeftPanel',
+      'btnToggleRightPanel',
+      'btnFocusMode',
+      'btnWorkspaceFocus',
+      'btnTogglePatchCanvas',
+      'btnToggleRack',
+      'workspaceTitle',
+      'workspaceDescription',
+      'toastRegion',
+      'inspectorMixerCount',
+      'inspectorRouteCount',
+      'inspectorLogCount',
+    ]) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    expect(app).toContain('resetWorkspaceLayout');
+    expect(app).toContain("id: 'layout:focus'");
+    expect(app).toContain("id: 'layout:reset'");
+    expect(app).toContain('workspaceViewMetadata');
+  });
+
   test('project level exposes missing-sample and sample-library panels', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 

@@ -37,7 +37,7 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Clip, arrangement, mixer, and module views expose serious state instead of placeholder sidebar text.
 - Peer status warnings are rendered instead of crashing when PeerJS transport is unavailable.
 
-## Implemented through 1.2.0
+## Implemented through 1.3.0
 
 - Editable clip slots, launch/stop/place operations, and project persistence.
 - Full piano-roll and pattern editing paths with keyboard/grid operations.
@@ -46,6 +46,10 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Session-specific hubs, local presence heartbeat/pruning, and late-join room snapshots.
 - Manual room-code joining, invite copying, sync status, and explicit sync recovery.
 - Remote PeerJS room hydration, live project updates, acknowledgements, deduplication, and transport diagnostics.
+- Persistent focus mode, independent side panels, collapsible production surfaces, and layout reset.
+- Contextual workspace headings, direct keyboard view shortcuts, and accessible arrow-key tab navigation.
+- Inspector drawers with live counts and remembered closed/open state.
+- Toast feedback for important state-changing actions and responsive no-overflow verification.
 
 ## Next implementation slices
 

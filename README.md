@@ -10,6 +10,8 @@ Modular peer-to-peer audio workstation with collaborative sessions.
 - **Field Recording**: Built-in audio capture and playback
 - **Visual Patching**: Canvas-based routing interface
 - **Storage Snapshots**: Save and restore rig configurations
+- **Flexible Workspace**: Persistent focus mode, independent panels, and collapsible production surfaces
+- **Keyboard Workflow**: Command center, direct workspace shortcuts, and accessible arrow-key tab navigation
 
 ## Quick Start
 
@@ -236,6 +238,19 @@ V11 Peer DAW supports real-time collaboration:
 Use `?localSync=false` to disable the BroadcastChannel fallback while testing
 or diagnosing the remote Peernet path. The Session panel shows project revision,
 last transport activity, delivery counts, and acknowledgement state.
+
+## Workspace and Keyboard UX
+
+The central DAW workspace can be adapted without losing project state:
+
+- **Focus mode** hides both side panels and gives the editor the full width.
+- **LEFT** and **RIGHT** independently toggle the setup and monitor panels.
+- Patch Canvas and Module Rack can be collapsed when a focused editor needs more vertical space.
+- Mixer, Routes, and Packet Monitor are independent persistent drawers.
+- `Ctrl+1` through `Ctrl+7` open Session, Signal Flow, Clips, Samples, Arrangement, Mixer, and Module views.
+- `Ctrl+Shift+L`, `Ctrl+Shift+R`, and `Ctrl+Shift+F` toggle the setup panel, monitor panel, and focus mode.
+- Arrow keys, Home, and End move between workspace tabs when a tab has focus.
+- Every layout action is also searchable from the `Ctrl+K` command center.
 
 ## App Hub V11 Integration
 

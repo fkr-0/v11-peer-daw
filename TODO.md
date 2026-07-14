@@ -27,5 +27,6 @@ by browser tests. This file tracks the remaining high-value work.
 ## Performance and reliability
 
 - Split the large application controller into collaboration, workspace, and UI modules.
+- Extract layout, toast, and workspace-navigation behavior from the large application controller.
 - Avoid rebuilding full workspace HTML for controls that can update incrementally.
 - Add long-session soak tests for hub re-election, peer reconnects, repeated room switches, and audio graph cleanup.

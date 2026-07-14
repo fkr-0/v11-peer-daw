@@ -28,6 +28,11 @@
       <nav class="transport">
         <span id="audioStatus" class="status-indicator" aria-live="polite">audio: cold</span>
         <span id="peerStatus" class="status-indicator" data-state="idle" aria-live="polite">peer: idle</span>
+        <div class="layout-controls" role="group" aria-label="Workspace panel visibility">
+          <button id="btnToggleLeftPanel" class="btn-layout" type="button" aria-pressed="true" title="Toggle setup panel (Ctrl Shift L)">LEFT</button>
+          <button id="btnFocusMode" class="btn-layout" type="button" aria-pressed="false" title="Focus the central workspace (Ctrl Shift F)">FOCUS</button>
+          <button id="btnToggleRightPanel" class="btn-layout" type="button" aria-pressed="true" title="Toggle monitor panel (Ctrl Shift R)">RIGHT</button>
+        </div>
         <button id="btnCommandCenter" class="btn-command" type="button" aria-haspopup="dialog" aria-controls="commandCenter">COMMAND <kbd>Ctrl K</kbd></button>
         <button id="btnBootAudio" class="btn-primary">BOOT AUDIO</button>
         <button id="btnStart">START CLOCK</button>
@@ -88,6 +93,7 @@
               <option value="peer">Peer Bridge</option>
             </optgroup>
           </select>
+          <p class="microcopy add-module-hint">Select to add immediately · use <kbd>Ctrl K</kbd> for the full command catalog.</p>
         </div>
 
         <div class="peer-panel">
@@ -98,10 +104,12 @@
             <input id="sessionCodeInput" class="mini-input" value="V11-OPEN-STUDIO" maxlength="48" autocomplete="off" spellcheck="false">
           </label>
           <div class="button-row">
-            <button id="btnConnectPeer" type="button">CONNECT</button>
-            <button id="btnCreateSession" type="button">SESSION</button>
+            <button id="btnConnectPeer" type="button">RECONNECT</button>
             <button id="btnJoinSession" type="button">JOIN ROOM</button>
-            <button id="btnSaveSnapshot" type="button">SNAP</button>
+          </div>
+          <div class="button-row">
+            <button id="btnCreateSession" type="button">NEW SESSION</button>
+            <button id="btnSaveSnapshot" type="button">SNAPSHOT</button>
           </div>
           <div class="button-row">
             <button id="btnCopyInvite" type="button">COPY INVITE</button>
@@ -177,51 +185,87 @@
       <section class="panel rack">
         <div class="workspace-view-shell">
           <div class="workspace-tabs" role="tablist" aria-label="DAW workspace views">
-            <button class="workspace-tab active" data-workspace-view="session" type="button">Session</button>
-            <button class="workspace-tab" data-workspace-view="chains" type="button">Signal Flow</button>
-            <button class="workspace-tab" data-workspace-view="clips" type="button">Clips</button>
-            <button class="workspace-tab" data-workspace-view="samples" type="button">Samples</button>
-            <button class="workspace-tab" data-workspace-view="arrangement" type="button">Arrange</button>
-            <button class="workspace-tab" data-workspace-view="mixer" type="button">Mixer</button>
-            <button class="workspace-tab" data-workspace-view="module" type="button">Module</button>
-            <button id="btnWorkspaceReset" class="workspace-reset" type="button" title="Return to session view">Reset</button>
+            <button class="workspace-tab active" data-workspace-view="session" type="button" title="Session overview (Ctrl 1)">Session</button>
+            <button class="workspace-tab" data-workspace-view="chains" type="button" title="Signal flow (Ctrl 2)">Signal Flow</button>
+            <button class="workspace-tab" data-workspace-view="clips" type="button" title="Clip launcher (Ctrl 3)">Clips</button>
+            <button class="workspace-tab" data-workspace-view="samples" type="button" title="Sample library (Ctrl 4)">Samples</button>
+            <button class="workspace-tab" data-workspace-view="arrangement" type="button" title="Arrangement (Ctrl 5)">Arrange</button>
+            <button class="workspace-tab" data-workspace-view="mixer" type="button" title="Mixer (Ctrl 6)">Mixer</button>
+            <button class="workspace-tab" data-workspace-view="module" type="button" title="Focused module (Ctrl 7)">Module</button>
+            <button id="btnWorkspaceReset" class="workspace-reset" type="button" title="Return to the session overview">Overview</button>
+          </div>
+          <div class="workspace-context-bar">
+            <div class="workspace-context-copy">
+              <span id="workspaceEyebrow" class="workspace-eyebrow">Workspace</span>
+              <h2 id="workspaceTitle">Session</h2>
+              <p id="workspaceDescription">Room, transport, project synchronization, and rig health.</p>
+            </div>
+            <div class="workspace-context-actions">
+              <span id="workspaceContextMeta" class="workspace-context-meta">Ctrl 1</span>
+              <button id="btnWorkspaceFocus" type="button" aria-pressed="false">Focus view</button>
+            </div>
           </div>
           <div id="workspaceMainView" class="workspace-main-view" aria-live="polite"></div>
         </div>
 
-        <div class="patch-canvas-container">
+        <div id="patchSurface" class="patch-canvas-container workspace-surface" data-collapsed="false">
           <div class="patch-canvas-header">
-            <h2>Patch Canvas</h2>
+            <div>
+              <h2>Patch Canvas</h2>
+              <p class="surface-summary">Connect modules visually and inspect audio/control direction.</p>
+            </div>
             <div class="patch-controls">
               <button id="btnAutoPatch" title="Auto-patch new modules">Auto-patch</button>
               <button id="btnClearRoutes" title="Clear all routes">Clear</button>
+              <button id="btnTogglePatchCanvas" type="button" aria-expanded="true" aria-controls="patchCanvas">Collapse</button>
             </div>
           </div>
-          <div class="patch-canvas-host" id="patchCanvas"></div>
+          <div class="surface-body">
+            <div class="patch-canvas-host" id="patchCanvas"></div>
+          </div>
         </div>
 
-        <div class="rack-container">
+        <div id="rackSurface" class="rack-container workspace-surface" data-collapsed="false">
           <div class="rack-header">
-            <h2>Module Rack</h2>
-            <div class="rack-stats">
-              <span id="moduleCount">0 modules</span>
-              <span id="routeCount">0 routes</span>
+            <div>
+              <h2>Module Rack</h2>
+              <p class="surface-summary">Direct access to every mounted module and its native controls.</p>
+            </div>
+            <div class="rack-header-actions">
+              <div class="rack-stats">
+                <span id="moduleCount">0 modules</span>
+                <span id="routeCount">0 routes</span>
+              </div>
+              <button id="btnToggleRack" type="button" aria-expanded="true" aria-controls="modules">Collapse</button>
             </div>
           </div>
-          <div class="modules" id="modules"></div>
+          <div class="surface-body">
+            <div class="modules" id="modules"></div>
+          </div>
         </div>
       </section>
 
       <aside class="panel inspector resizable-mixer">
-        <h2>Mixer / Routes</h2>
-        <div class="mixer-strip" id="mixerStrip"></div>
+        <details class="inspector-drawer ui-drawer" data-drawer-key="Mixer" open>
+          <summary><span>Mixer</span><span id="inspectorMixerCount" class="summary-meta">0</span></summary>
+          <div class="inspector-drawer-body">
+            <div class="mixer-strip" id="mixerStrip"></div>
+          </div>
+        </details>
 
-        <div class="routes-container">
-          <ol class="routes" id="routes"></ol>
-        </div>
+        <details class="inspector-drawer ui-drawer" data-drawer-key="Routes" open>
+          <summary><span>Routes</span><span id="inspectorRouteCount" class="summary-meta">0</span></summary>
+          <div class="inspector-drawer-body routes-container">
+            <ol class="routes" id="routes"></ol>
+          </div>
+        </details>
 
-        <h2>Packet Monitor</h2>
-        <div class="event-log" id="eventLog"></div>
+        <details class="inspector-drawer ui-drawer" data-drawer-key="Packet Monitor" open>
+          <summary><span>Packet Monitor</span><span id="inspectorLogCount" class="summary-meta">0</span></summary>
+          <div class="inspector-drawer-body">
+            <div class="event-log" id="eventLog"></div>
+          </div>
+        </details>
       </aside>
     </section>
 
@@ -262,6 +306,8 @@
       </footer>
     </section>
   </div>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <script type="module" src="./vendor/peernet/peernet-shared-core.js"></script>

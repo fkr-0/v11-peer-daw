@@ -41,11 +41,42 @@ describe('WorkspacePreferences', () => {
     expect(drawers[1].open).toBe(true);
 
     expect(preferences.saveDrawerStates(drawers)).toEqual({ Modules: false, Routes: true });
-    drawers[0].open = false;
+    drawers[0].open = true;
     drawers[1].open = false;
     expect(preferences.restoreDrawerStates(drawers)).toEqual({ Modules: false, Routes: true });
     expect(drawers[0].open).toBe(false);
     expect(drawers[1].open).toBe(true);
+  });
+
+  test('persists panel visibility and focus mode with safe defaults', () => {
+    const storage = new MemoryStorage();
+    const preferences = new WorkspacePreferences({ storage });
+
+    expect(preferences.restoreLayoutState()).toEqual({ left: true, right: true, focus: false });
+    expect(preferences.saveLayoutState({ left: false, right: true, focus: true })).toEqual({
+      left: false,
+      right: true,
+      focus: true,
+    });
+    expect(preferences.restoreLayoutState()).toEqual({ left: false, right: true, focus: true });
+
+    storage.setItem('v11-daw-layout-state', '{bad json');
+    expect(preferences.restoreLayoutState({ left: false, right: false })).toEqual({
+      left: false,
+      right: false,
+      focus: false,
+    });
+  });
+
+  test('persists patch-canvas and rack expansion independently', () => {
+    const storage = new MemoryStorage();
+    const preferences = new WorkspacePreferences({ storage });
+
+    expect(preferences.saveSurfaceStates({ patch: false, rack: true })).toEqual({
+      patch: false,
+      rack: true,
+    });
+    expect(preferences.restoreSurfaceStates()).toEqual({ patch: false, rack: true });
   });
 
   test('fails closed when storage is unavailable', () => {
@@ -65,5 +96,11 @@ describe('WorkspacePreferences', () => {
     expect(
       preferences.saveDrawerStates([{ open: true, querySelector: () => ({ textContent: 'X' }) }])
     ).toEqual({ X: true });
+    expect(preferences.saveLayoutState({ left: false })).toEqual({
+      left: false,
+      right: true,
+      focus: false,
+    });
+    expect(preferences.restoreLayoutState()).toEqual({ left: true, right: true, focus: false });
   });
 });
