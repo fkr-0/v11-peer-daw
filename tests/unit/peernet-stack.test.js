@@ -44,5 +44,69 @@ describe('PeernetStack session isolation', () => {
     );
     expect(calls).toEqual(['save', 'announce:ROOM42']);
   });
+
+  test('keeps message subscriptions registered before the transport is initialized', () => {
+    const listeners = new Map();
+    const stack = new PeernetStack();
+    const received = [];
+    stack.onMessage('project-sync', (data, meta) => received.push({ data, meta }));
+    stack.core = {
+      on(type, handler) {
+        listeners.set(type, handler);
+      },
+    };
+
+    stack.bindPendingMessageTypes();
+    listeners.get('message:artifact:project-sync')({
+      id: 'peer-a',
+      entry: { username: 'Alpha' },
+      data: { type: 'artifact:project-sync', data: { kind: 'snapshot', version: 4 } },
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0].data).toEqual({ kind: 'snapshot', version: 4 });
+    expect(received[0].meta).toEqual(
+      expect.objectContaining({ peerId: 'peer-a', entry: { username: 'Alpha' } })
+    );
+  });
+
+  test('reports broadcast delivery and supports targeted project messages', () => {
+    const sent = [];
+    const stack = new PeernetStack();
+    stack.core = {
+      connections: new Map([
+        ['peer-a', { conn: { open: true } }],
+        ['peer-b', { conn: { open: true } }],
+      ]),
+      broadcast(message) {
+        sent.push(['broadcast', message]);
+      },
+      send(peerId, message) {
+        sent.push(['send', peerId, message]);
+      },
+    };
+
+    const broadcast = stack.broadcast('project-sync', { kind: 'update' });
+    const targeted = stack.send('project-sync', { kind: 'ack' }, 'peer-a');
+
+    expect(broadcast).toEqual(expect.objectContaining({ peerCount: 2, delivered: true }));
+    expect(targeted).toEqual(
+      expect.objectContaining({ peerId: 'peer-a', peerCount: 1, delivered: true })
+    );
+    expect(sent).toEqual([
+      [
+        'broadcast',
+        expect.objectContaining({
+          type: 'artifact:project-sync',
+          data: { kind: 'update' },
+        }),
+      ],
+      [
+        'send',
+        'peer-a',
+        expect.objectContaining({ type: 'artifact:project-sync', data: { kind: 'ack' } }),
+      ],
+    ]);
+  });
 });
 

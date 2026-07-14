@@ -4,6 +4,30 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] - 2026-07-14
+
+### Added
+
+- Room-scoped project synchronization over the production Peernet transport, not only the same-origin BroadcastChannel fallback.
+- A versioned request/snapshot/update/acknowledgement protocol with cross-transport message deduplication.
+- Targeted Peernet snapshot and acknowledgement replies, retry/backoff for initial hydration, and automatic resync when peers appear.
+- Per-transport send/receive timestamps, delivery counts, last acknowledgement state, and a project-sync dashboard card.
+- Remote-only diagnostics through `?localSync=false` and deterministic browser coverage using the production shared core over a fake low-level PeerJS transport.
+- A dedicated, unit-tested `ProjectSyncState` core module.
+
+### Changed
+
+- Peernet message subscriptions may now be registered before transport initialization and remain active after startup/reconnect.
+- Project updates publish through both Peernet and the local fallback while retaining deterministic version/client conflict ordering.
+- Manual `SYNC NOW` always performs a fresh room request instead of becoming a no-op after the first successful synchronization.
+- The Session workspace now exposes project revision, transport activity, peer delivery counts, and direct synchronization recovery.
+
+### Fixed
+
+- Remote clients no longer require an App Hub sub-lobby or a same-browser fallback channel to receive the current project.
+- Late PeerJS connections trigger a new hydration request instead of remaining on the default rig.
+- Duplicate delivery of the same update over local and remote transports no longer rebuilds the project twice.
+
 ## [1.1.1] - 2026-07-14
 
 ### Added
@@ -57,6 +81,7 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 
 - Initial standalone V11 Peer DAW repository and modular collaborative workstation baseline.
 
+[1.2.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fkr-0/v11-peer-daw/releases/tag/v1.0.0

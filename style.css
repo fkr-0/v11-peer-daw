@@ -63,9 +63,16 @@
 
 .project-sync-summary[data-state="synced"],
 .project-sync-summary[data-state="published"],
-.project-sync-summary[data-state="resolved"] {
+.project-sync-summary[data-state="resolved"],
+.project-sync-summary[data-state="acknowledged"] {
   border-left-color: var(--accent-success);
   background: rgba(124, 204, 108, 0.06);
+}
+
+.project-sync-summary[data-state="unsynced"],
+.project-sync-summary[data-state="remote-only"] {
+  border-left-color: var(--accent-warning);
+  background: rgba(255, 204, 108, 0.06);
 }
 
 .project-sync-summary[data-state="unavailable"] {

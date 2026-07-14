@@ -22,6 +22,7 @@ import {
 } from './core/module-selectors.js';
 import { PatchBay } from './core/patchbay.js';
 import { PeernetStack } from './core/peernet-stack.js';
+import { PROJECT_SYNC_CHANNEL, ProjectSyncState } from './core/project-sync.js';
 import { createProjectPackage, parseProjectPayload } from './core/project-io.js';
 import {
   createProjectSource,
@@ -90,12 +91,17 @@ class V11PeerDAW {
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
     this.spectateMode =
       this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
+    this.localSyncDisabled = this.urlParams.get('localSync') === 'false';
     this.defaultSessionCode =
       this.normalizeSessionCode(this.urlParams.get('session')) || 'V11-OPEN-STUDIO';
     this.peerList = [];
     this.workspaceView = 'session';
     this.suppressProjectBroadcast = false;
     this.clientId = `v11-client-${Math.random().toString(36).slice(2, 10)}`;
+    this.projectSync = new ProjectSyncState({
+      clientId: this.clientId,
+      sessionCode: this.defaultSessionCode,
+    });
     this.localProjectVersion = 0;
     this.lastAppliedProjectStamp = { version: 0, clientId: '' };
     this.localProjectVersionsByClient = new Map();
@@ -108,6 +114,7 @@ class V11PeerDAW {
     this.localSessionBeforeUnloadBound = false;
     this.localSyncStatus = 'starting';
     this.localSyncRequestId = null;
+    this.projectSyncRequestAttempt = 0;
     this.lastLocalSyncAt = 0;
     this.gridSelection = new Set();
     this.gridDrag = null;
@@ -121,6 +128,7 @@ class V11PeerDAW {
     this.commandCenterMatches = [];
     this.commandCenterReturnFocus = null;
     this.peernetHealth = null;
+    this.peernetProjectSyncConnected = false;
     this.sampleLibrary = new SampleLibrary();
     this.pendingSampleUploadSlotId = null;
     this.sampleSyncProgress = new Map();
@@ -147,9 +155,29 @@ class V11PeerDAW {
       synced: 'synced',
       published: 'local change published',
       resolved: 'conflict resolved',
+      acknowledged: 'remote peer acknowledged',
+      unsynced: 'connected but no room snapshot received',
+      'remote-only': 'remote transport only',
       'local-only': 'local-only · no room snapshot received',
       unavailable: 'local-only · browser channel unavailable',
     };
+    const diagnostics = this.projectSync.diagnostics();
+    const transportText = ['local', 'peernet']
+      .map((transport) => {
+        const activity = diagnostics.transports[transport];
+        if (!activity) return null;
+        const lastActivity = Math.max(activity.sentAt || 0, activity.receivedAt || 0);
+        const time = lastActivity
+          ? new Date(lastActivity).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            })
+          : 'idle';
+        return `${transport} ${activity.peerCount || 0}p @ ${time}`;
+      })
+      .filter(Boolean)
+      .join(' · ');
     const time = this.lastLocalSyncAt
       ? ` · ${new Date(this.lastLocalSyncAt).toLocaleTimeString([], {
           hour: '2-digit',
@@ -157,7 +185,8 @@ class V11PeerDAW {
           second: '2-digit',
         })}`
       : '';
-    node.textContent = `project sync: ${labels[this.localSyncStatus] || this.localSyncStatus}${time} · v${this.localProjectVersion}`;
+    const ack = diagnostics.lastAckClientId ? ` · ack ${diagnostics.lastAckClientId}` : '';
+    node.textContent = `project sync: ${labels[this.localSyncStatus] || this.localSyncStatus}${time} · v${this.localProjectVersion}${ack}${transportText ? ` · ${transportText}` : ''}`;
     node.dataset.state = this.localSyncStatus;
   }
 
@@ -191,6 +220,7 @@ class V11PeerDAW {
     this.closeLocalSessionBus({ announce: true });
     this.defaultSessionCode = nextCode;
     this.sessionCode = nextCode;
+    this.projectSync.setSessionCode(nextCode);
     if (updateUrl) this.updateSessionUrl(nextCode);
     const session = await this.bootstrapDefaultPeernetSession({ force: true });
     this.bindLocalSessionBus();
@@ -199,49 +229,71 @@ class V11PeerDAW {
     return session;
   }
 
-  requestLocalSessionProject() {
-    if (!this.localSessionBus) {
+  sendProjectSyncMessage(message, { transport = 'all', peerId = '' } = {}) {
+    const deliveries = [];
+    if ((transport === 'all' || transport === 'local') && this.localSessionBus) {
+      const sentAt = Date.now();
+      this.localSessionBus.postMessage(message);
+      const delivery = {
+        sentAt,
+        peerCount: this.localSessionPeers.size,
+        delivered: this.localSessionPeers.size > 0,
+      };
+      this.projectSync.markSent('local', delivery);
+      deliveries.push({ transport: 'local', ...delivery });
+    }
+    if ((transport === 'all' || transport === 'peernet') && this.peernet.started) {
+      const delivery = this.peernet.send(PROJECT_SYNC_CHANNEL, message, peerId);
+      this.projectSync.markSent('peernet', delivery);
+      deliveries.push({ transport: 'peernet', ...delivery });
+    }
+    this.renderLocalSyncStatus();
+    return deliveries;
+  }
+
+  requestLocalSessionProject({ attempt = 0, force = false } = {}) {
+    if (!this.localSessionBus && !this.peernet.started) {
       this.localSyncStatus = 'unavailable';
       this.renderLocalSyncStatus();
       return null;
     }
-    const requestId = `${this.clientId}:${Date.now().toString(36)}`;
-    this.localSyncRequestId = requestId;
+    if (!force && this.localSyncStatus === 'synced') return this.localSyncRequestId;
+    const request = this.projectSync.create('request', { attempt });
+    this.localSyncRequestId = request.messageId;
+    this.projectSyncRequestAttempt = attempt;
     this.localSyncStatus = 'requesting';
-    this.renderLocalSyncStatus();
-    this.localSessionBus.postMessage({
-      type: 'project-request',
-      clientId: this.clientId,
-      sessionCode: this.defaultSessionCode,
-      requestId,
-      at: Date.now(),
-    });
+    this.sendProjectSyncMessage(request);
     window.clearTimeout(this.localSessionSyncTimer);
+    const retryDelay = [900, 1600, 2600][attempt] || 2600;
     this.localSessionSyncTimer = window.setTimeout(() => {
-      if (this.localSyncRequestId !== requestId || this.localSyncStatus !== 'requesting') return;
-      this.localSyncStatus = 'local-only';
+      if (
+        this.localSyncRequestId !== request.messageId ||
+        this.localSyncStatus !== 'requesting'
+      )
+        return;
+      if (attempt < 2) {
+        this.requestLocalSessionProject({ attempt: attempt + 1, force: true });
+        return;
+      }
+      this.localSyncStatus = this.peernet.health().connected ? 'unsynced' : 'local-only';
       this.renderLocalSyncStatus();
-    }, 1400);
-    return requestId;
+    }, retryDelay);
+    return request.messageId;
   }
 
-  sendLocalProjectSnapshot(message = {}) {
-    if (!this.localSessionBus || !message.clientId || !message.requestId) return;
-    this.localSessionBus.postMessage({
-      type: 'project-snapshot',
-      clientId: this.clientId,
+  sendLocalProjectSnapshot(message = {}, { transport = 'local', peerId = '' } = {}) {
+    if (!message.clientId || !message.messageId) return;
+    const snapshot = this.projectSync.create('snapshot', {
       targetClientId: message.clientId,
-      sessionCode: this.defaultSessionCode,
-      requestId: message.requestId,
+      requestId: message.messageId,
       version: this.localProjectVersion,
       stamp: this.lastAppliedProjectStamp,
       project: this.serializeRig(),
-      at: Date.now(),
     });
-    this.renderLocalSyncStatus();
+    this.sendProjectSyncMessage(snapshot, { transport, peerId });
   }
 
-  applyLocalProjectSnapshot(message = {}) {
+  applyLocalProjectSnapshot(message = {}, { transport = 'local' } = {}) {
     if (message.targetClientId !== this.clientId || message.requestId !== this.localSyncRequestId)
       return;
     const stamp = message.stamp || {
@@ -257,9 +309,64 @@ class V11PeerDAW {
     this.lastAppliedProjectStamp = stamp;
     this.localSyncStatus = 'synced';
     this.lastLocalSyncAt = Date.now();
+    this.projectSyncRequestAttempt = 0;
     window.clearTimeout(this.localSessionSyncTimer);
     this.localSessionSyncTimer = null;
-    this.logText(`local session snapshot received from ${message.clientId}`);
+    this.logText(
+      transport === 'local'
+        ? `local session snapshot received from ${message.clientId}`
+        : `Peernet room snapshot received from ${message.clientId}`
+    );
+    this.applyRemoteProject(message.project);
+    this.renderLocalSyncStatus();
+  }
+
+  sendProjectSyncAck(message = {}, { transport = 'local', peerId = '' } = {}) {
+    const ack = this.projectSync.create('ack', {
+      targetClientId: message.clientId,
+      ackFor: message.messageId,
+      version: Number(message.version || 0),
+    });
+    this.sendProjectSyncMessage(ack, { transport, peerId });
+  }
+
+  handleProjectSyncMessage(message = {}, meta = {}) {
+    const transport = meta.transport || 'unknown';
+    if (!this.projectSync.accept(message, meta)) return;
+    if (message.type === 'project-request') {
+      this.sendLocalProjectSnapshot(message, { transport, peerId: meta.peerId || '' });
+      return;
+    }
+    if (message.type === 'project-snapshot') {
+      this.applyLocalProjectSnapshot(message, { transport });
+      return;
+    }
+    if (message.type === 'project-ack') {
+      if (message.targetClientId !== this.clientId) return;
+      this.projectSync.markAck(message);
+      this.localSyncStatus = 'acknowledged';
+      this.lastLocalSyncAt = Date.now();
+      this.renderLocalSyncStatus();
+      return;
+    }
+    if (message.type !== 'project-update') return;
+    this.sendProjectSyncAck(message, { transport, peerId: meta.peerId || '' });
+    const incomingVersion = Number(message.version || 0);
+    const seenVersion = Number(this.localProjectVersionsByClient.get(message.clientId) || 0);
+    if (incomingVersion <= seenVersion) return;
+    this.localProjectVersionsByClient.set(message.clientId, incomingVersion);
+    this.localProjectVersion = Math.max(this.localProjectVersion, incomingVersion);
+    const incomingStamp = { version: incomingVersion, clientId: String(message.clientId || '') };
+    if (this.compareProjectStamp(incomingStamp, this.lastAppliedProjectStamp) <= 0) {
+      this.rebroadcastWinningLocalProject(incomingStamp);
+      return;
+    }
+    this.lastAppliedProjectStamp = incomingStamp;
+    this.localSyncStatus = 'synced';
+    this.lastLocalSyncAt = Date.now();
+    this.logText(
+      `${transport === 'peernet' ? 'Peernet' : 'local session'} project update: ${message.reason || 'remote-change'}`
+    );
     this.applyRemoteProject(message.project);
     this.renderLocalSyncStatus();
   }
@@ -319,14 +426,20 @@ class V11PeerDAW {
     this.resolvedLocalConflicts.clear();
     this.localSyncStatus = 'local-only';
     this.localSyncRequestId = null;
+    this.projectSyncRequestAttempt = 0;
     this.lastLocalSyncAt = 0;
     this.renderPeerCounts();
     this.renderLocalSyncStatus();
   }
 
   bindLocalSessionBus({ force = false } = {}) {
+    if (this.localSyncDisabled) {
+      this.localSyncStatus = this.peernet.started ? 'remote-only' : 'unavailable';
+      this.renderLocalSyncStatus();
+      return;
+    }
     if (!('BroadcastChannel' in window)) {
-      this.localSyncStatus = 'unavailable';
+      this.localSyncStatus = this.peernet.started ? 'remote-only' : 'unavailable';
       this.renderLocalSyncStatus();
       return;
     }
@@ -393,32 +506,10 @@ class V11PeerDAW {
       this.updateSessionUI();
       return;
     }
-    if (message.type === 'project-request') {
-      this.sendLocalProjectSnapshot(message);
-      return;
-    }
-    if (message.type === 'project-snapshot') {
-      this.applyLocalProjectSnapshot(message);
-      return;
-    }
-    if (message.type === 'project-update') {
-      const incomingVersion = Number(message.version || 0);
-      const seenVersion = Number(this.localProjectVersionsByClient.get(message.clientId) || 0);
-      if (incomingVersion <= seenVersion) return;
-      this.localProjectVersionsByClient.set(message.clientId, incomingVersion);
-      this.localProjectVersion = Math.max(this.localProjectVersion, incomingVersion);
-      const incomingStamp = { version: incomingVersion, clientId: String(message.clientId || '') };
-      if (this.compareProjectStamp(incomingStamp, this.lastAppliedProjectStamp) <= 0) {
-        this.rebroadcastWinningLocalProject(incomingStamp);
-        return;
-      }
-      this.lastAppliedProjectStamp = incomingStamp;
-      this.localSyncStatus = 'synced';
-      this.lastLocalSyncAt = Date.now();
-      this.logText(`local session project update: ${message.reason || 'remote-change'}`);
-      this.applyRemoteProject(message.project);
-      this.renderLocalSyncStatus();
-    }
+    this.handleProjectSyncMessage(message, {
+      transport: 'local',
+      receivedAt: Date.now(),
+    });
   }
 
   compareProjectStamp(a = {}, b = {}) {
@@ -428,7 +519,7 @@ class V11PeerDAW {
   }
 
   publishLocalSessionProject(reason = 'local-change') {
-    if (!this.localSessionBus || this.suppressProjectBroadcast) return;
+    if ((!this.localSessionBus && !this.peernet.started) || this.suppressProjectBroadcast) return;
     this.localProjectVersion += 1;
     this.lastAppliedProjectStamp = {
       version: this.localProjectVersion,
@@ -436,17 +527,13 @@ class V11PeerDAW {
     };
     this.localSyncStatus = reason === 'conflict-resolution' ? 'resolved' : 'published';
     this.lastLocalSyncAt = Date.now();
-    this.localSessionBus.postMessage({
-      type: 'project-update',
-      clientId: this.clientId,
+    const update = this.projectSync.create('update', {
       username: document.querySelector('#pilotName')?.value || 'pilot',
-      sessionCode: this.defaultSessionCode,
       version: this.localProjectVersion,
       reason,
       project: this.serializeRig(),
-      at: Date.now(),
     });
-    this.renderLocalSyncStatus();
+    this.sendProjectSyncMessage(update);
   }
 
   bindExampleProjects() {
@@ -587,7 +674,7 @@ class V11PeerDAW {
       ?.addEventListener('click', () => this.copySessionInvite());
     document
       .querySelector('#btnSyncSession')
-      ?.addEventListener('click', () => this.requestLocalSessionProject());
+      ?.addEventListener('click', () => this.requestLocalSessionProject({ force: true }));
     document
       .querySelector('#btnJoinSession')
       ?.addEventListener('click', () =>
@@ -927,6 +1014,20 @@ class V11PeerDAW {
     }
     this.renderPeerCounts();
     if (this.workspaceView === 'session') this.scheduleRender();
+  }
+
+  handlePeernetProjectSyncHealth(health = this.peernet.health()) {
+    const connected = Boolean(health?.connected);
+    if (!connected) {
+      this.peernetProjectSyncConnected = false;
+      return;
+    }
+    if (this.peernetProjectSyncConnected) return;
+    this.peernetProjectSyncConnected = true;
+    window.setTimeout(
+      () => this.requestLocalSessionProject({ force: true }),
+      120
+    );
   }
 
   openCommandCenter(initialQuery = '') {
@@ -2553,6 +2654,10 @@ class V11PeerDAW {
   }
 
   handleModuleAction(action, target) {
+    if (action === 'project-sync-now') {
+      this.requestLocalSessionProject({ force: true });
+      return;
+    }
     if (action === 'peer-reconnect') {
       this.bootstrapDefaultPeernetSession({ force: true }).catch((error) =>
         this.logText(`peer reconnect failed: ${error.message}`)
@@ -3117,7 +3222,23 @@ class V11PeerDAW {
       const assigned = new Set(chains.flat());
       const unpatched = modules.filter((module) => !assigned.has(module.id)).length;
       const health = this.peernetHealth || this.peernet.health();
-      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Network health</strong><span class="big-number">${this.escapeHtml(health.state || 'idle')}</span><p class="microcopy">role ${this.escapeHtml(health.role || 'offline')} · ${this.escapeHtml(health.peerCount || 0)} direct peers · ${health.lastError ? `last error ${this.escapeHtml(health.lastError)}` : 'transport healthy'}</p><button type="button" data-module-action="peer-reconnect">Reconnect</button></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
+      const syncDiagnostics = this.projectSync.diagnostics();
+      const peernetSync = syncDiagnostics.transports.peernet || {};
+      const localSync = syncDiagnostics.transports.local || {};
+      const syncLastAt = Math.max(
+        peernetSync.sentAt || 0,
+        peernetSync.receivedAt || 0,
+        localSync.sentAt || 0,
+        localSync.receivedAt || 0
+      );
+      const syncLastText = syncLastAt
+        ? new Date(syncLastAt).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        : 'no traffic yet';
+      root.innerHTML = `<div class="workspace-grid"><article class="workspace-card"><strong>Shared session</strong><span class="big-number">${this.escapeHtml(code)}</span><p class="microcopy">Default mode auto-connects every visitor to this open Peernet/PeerJS-backed studio session.</p></article><article class="workspace-card signal-flow-overview-card"><strong>Signal Flow</strong><span class="big-number">${chains.length}</span><p class="microcopy">${chains.length} module chains · ${unpatched} unpatched modules. Inspect how clips, instruments, effects, and mixer outputs make sound.</p><button type="button" data-workspace-view="chains">Inspect Signal Flow</button></article><article class="workspace-card"><strong>Participants</strong><span class="big-number">${participantCount}</span><p class="microcopy">Local pilot plus connected Peernet or same-session fallback peers.</p></article><article class="workspace-card"><strong>Network health</strong><span class="big-number">${this.escapeHtml(health.state || 'idle')}</span><p class="microcopy">role ${this.escapeHtml(health.role || 'offline')} · ${this.escapeHtml(health.peerCount || 0)} direct peers · ${health.lastError ? `last error ${this.escapeHtml(health.lastError)}` : 'transport healthy'}</p><button type="button" data-module-action="peer-reconnect">Reconnect</button></article><article class="workspace-card"><strong>Project sync</strong><span class="big-number">v${this.localProjectVersion}</span><p class="microcopy">${this.escapeHtml(this.localSyncStatus)} · last traffic ${this.escapeHtml(syncLastText)} · Peernet ${this.escapeHtml(peernetSync.peerCount || 0)} links · local ${this.escapeHtml(localSync.peerCount || 0)} peers${syncDiagnostics.lastAckClientId ? ` · ack ${this.escapeHtml(syncDiagnostics.lastAckClientId)}` : ''}</p><button type="button" data-module-action="project-sync-now">Sync now</button></article><article class="workspace-card"><strong>Rig state</strong><span class="big-number">${modules.length}</span><p class="microcopy">${routeCount} packet routes · ${audioRoutes} audio routes · ${this.peernet.started ? 'peernet active' : 'local-first fallback'} · local bus ${this.localSessionBus ? 'ready' : 'off'}</p></article></div>`;
       return;
     }
     if (view === 'samples') {
@@ -3620,15 +3741,33 @@ class V11PeerDAW {
     });
     this.subLobby.on('project', ({ reason }) => this.logText(`remote project applied: ${reason}`));
     this.subLobby.on('data', ({ from, data }) => this.handleSubLobbySampleData(from, data));
+    this.peernet.onMessage(PROJECT_SYNC_CHANNEL, (message, meta) =>
+      this.handleProjectSyncMessage(message, {
+        transport: 'peernet',
+        peerId: meta.peerId,
+        receivedAt: meta.receivedAt,
+      })
+    );
 
     this.peernet.addEventListener('status', (e) => {
       const health = e.detail.health || this.peernet.health();
       this.renderPeernetHealth(health);
+      this.handlePeernetProjectSyncHealth(health);
     });
-    this.peernet.addEventListener('health', (e) => this.renderPeernetHealth(e.detail));
+    this.peernet.addEventListener('health', (e) => {
+      this.renderPeernetHealth(e.detail);
+      this.handlePeernetProjectSyncHealth(e.detail);
+    });
     this.peernet.addEventListener('presence', (e) => {
+      const previousPeerCount = this.peerList.length;
       this.peerList = e.detail;
       this.updateSessionUI();
+      if (
+        this.peerList.length > previousPeerCount &&
+        ['requesting', 'unsynced', 'local-only', 'remote-only'].includes(this.localSyncStatus)
+      ) {
+        this.requestLocalSessionProject({ force: true });
+      }
     });
     this.peernet.addEventListener('storage', (e) => {
       document.querySelector('#storageStatus').textContent =

@@ -8,8 +8,8 @@ by browser tests. This file tracks the remaining high-value work.
 
 - Move frequent edits from whole-project snapshots toward typed operations.
 - Add revision acknowledgements and a visible unresolved-conflict state.
-- Verify initial project hydration through remote Peernet/PeerJS clients.
-- Add retry/backoff and last-message timestamps for every transport layer.
+- Persist revision acknowledgements across reconnects and expose unacknowledged revisions.
+- Add retry/backoff diagnostics for App Hub sub-lobbies and sample transfer paths.
 
 ## Mixer
 
@@ -28,4 +28,4 @@ by browser tests. This file tracks the remaining high-value work.
 
 - Split the large application controller into collaboration, workspace, and UI modules.
 - Avoid rebuilding full workspace HTML for controls that can update incrementally.
-- Add long-session soak tests for peer reconnects, repeated room switches, and audio graph cleanup.
+- Add long-session soak tests for hub re-election, peer reconnects, repeated room switches, and audio graph cleanup.

@@ -224,11 +224,18 @@ The field recorder module provides:
 
 V11 Peer DAW supports real-time collaboration:
 
-1. Create a session (generates share code)
-2. Share code with collaborators
-3. Changes sync automatically
-4. Audio packets broadcast over P2P
-5. Storage snapshots for persistence
+1. Create or join a room using its share code.
+2. Share the generated invite URL with collaborators.
+3. Late joiners request the current project snapshot automatically.
+4. Project updates travel over PeerJS/Peernet with a same-origin fallback.
+5. Duplicate cross-transport messages are ignored deterministically.
+6. Updates receive acknowledgements and expose transport diagnostics in Session view.
+7. Audio/control packets continue to broadcast over P2P.
+8. Storage snapshots remain available for persistence and recovery.
+
+Use `?localSync=false` to disable the BroadcastChannel fallback while testing
+or diagnosing the remote Peernet path. The Session panel shows project revision,
+last transport activity, delivery counts, and acknowledgement state.
 
 ## App Hub V11 Integration
 

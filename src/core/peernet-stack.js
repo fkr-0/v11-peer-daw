@@ -14,6 +14,8 @@ export class PeernetStack extends EventTarget {
     this.started = false;
     this.storageStarted = false;
     this.lastHealth = null;
+    this.messageHandlers = new Map();
+    this.boundMessageTypes = new Set();
   }
 
   hubIdForProfile(profile = {}) {
@@ -80,6 +82,7 @@ export class PeernetStack extends EventTarget {
       });
 
     this.bindEvents();
+    this.bindPendingMessageTypes();
     return true;
   }
 
@@ -162,12 +165,53 @@ export class PeernetStack extends EventTarget {
   }
 
   broadcast(type, data = {}) {
-    this.core?.broadcast({ type: `artifact:${type}`, data, at: Date.now() });
+    const sentAt = Date.now();
+    const peerCount = Number(this.core?.connections?.size || 0);
+    this.core?.broadcast({ type: `artifact:${type}`, data, at: sentAt });
+    return { type, peerCount, sentAt, delivered: peerCount > 0 };
   }
 
   onMessage(type, handler) {
-    this.core?.on?.(`message:artifact:${type}`, (payload) => handler(payload?.data || payload));
+    if (typeof handler !== 'function') return this;
+    const handlers = this.messageHandlers.get(type) || new Set();
+    handlers.add(handler);
+    this.messageHandlers.set(type, handlers);
+    this.bindMessageType(type);
     return this;
+  }
+
+  offMessage(type, handler) {
+    const handlers = this.messageHandlers.get(type);
+    if (!handlers) return this;
+    handlers.delete(handler);
+    if (!handlers.size) this.messageHandlers.delete(type);
+    return this;
+  }
+
+  bindPendingMessageTypes() {
+    for (const type of this.messageHandlers.keys()) this.bindMessageType(type);
+  }
+
+  bindMessageType(type) {
+    if (!this.core?.on || this.boundMessageTypes.has(type)) return;
+    this.boundMessageTypes.add(type);
+    this.core.on(`message:artifact:${type}`, (payload) => {
+      const data = payload?.data?.data ?? payload?.data ?? payload;
+      const meta = {
+        peerId: payload?.id || null,
+        entry: payload?.entry || null,
+        receivedAt: Date.now(),
+      };
+      for (const handler of this.messageHandlers.get(type) || []) handler(data, meta);
+    });
+  }
+
+  send(type, data = {}, peerId = '') {
+    if (!peerId) return this.broadcast(type, data);
+    const sentAt = Date.now();
+    const connected = Boolean(this.core?.connections?.get?.(peerId)?.conn?.open);
+    this.core?.send?.(peerId, { type: `artifact:${type}`, data, at: sentAt });
+    return { type, peerId, peerCount: connected ? 1 : 0, sentAt, delivered: connected };
   }
 
   joinLobby(lobbyId) {

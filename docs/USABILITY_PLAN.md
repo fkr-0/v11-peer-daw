@@ -37,7 +37,7 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Clip, arrangement, mixer, and module views expose serious state instead of placeholder sidebar text.
 - Peer status warnings are rendered instead of crashing when PeerJS transport is unavailable.
 
-## Implemented through 1.1.1
+## Implemented through 1.2.0
 
 - Editable clip slots, launch/stop/place operations, and project persistence.
 - Full piano-roll and pattern editing paths with keyboard/grid operations.
@@ -45,6 +45,7 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Two-client convergence and deterministic simultaneous-edit verification.
 - Session-specific hubs, local presence heartbeat/pruning, and late-join room snapshots.
 - Manual room-code joining, invite copying, sync status, and explicit sync recovery.
+- Remote PeerJS room hydration, live project updates, acknowledgements, deduplication, and transport diagnostics.
 
 ## Next implementation slices
 
@@ -56,9 +57,9 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 
 ### Slice 7: remote transport diagnostics
 
-- Show direct PeerJS, App Hub sub-lobby, and local-channel health independently.
-- Add reconnect attempts, last packet timestamps, and route-level failure state.
-- Verify remote-room hydration through the actual Peernet transport, not only BroadcastChannel.
+- Add reconnect attempt history and route-level failure state for App Hub sub-lobbies.
+- Persist acknowledgement/revision history across reconnects.
+- Add hub-loss and hub-re-election soak verification.
 
 ### Slice 8: mixer and module depth
 

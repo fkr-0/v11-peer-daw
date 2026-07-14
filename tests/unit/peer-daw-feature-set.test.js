@@ -155,6 +155,10 @@ describe('consolidated V11 peer DAW catalog', () => {
   test('peer session panel exposes sub-lobby multiplayer controls', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
     const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+    const projectSync = readFileSync(
+      new URL('../../src/core/project-sync.js', import.meta.url),
+      'utf8'
+    );
 
     expect(html).toContain('id="sessionCodeInput"');
     expect(html).toContain('id="btnJoinSession"');
@@ -166,8 +170,11 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(html).toContain('id="btnCarrySubLobby"');
     expect(html).toContain('id="blockIncomingJoin"');
     expect(html).toContain('id="subLobbyPeerList"');
-    expect(app).toContain("type: 'project-request'");
-    expect(app).toContain("type: 'project-snapshot'");
+    expect(projectSync).toContain("request: 'project-request'");
+    expect(projectSync).toContain("snapshot: 'project-snapshot'");
+    expect(projectSync).toContain("update: 'project-update'");
+    expect(projectSync).toContain("ack: 'project-ack'");
+    expect(app).toContain('PROJECT_SYNC_CHANNEL');
     expect(app).toContain('switchSessionCode');
   });
 
