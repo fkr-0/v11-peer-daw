@@ -52,6 +52,7 @@ import {
   renderSampleLibraryMatrixHtml,
   renderSampleLibraryTreeHtml,
 } from './ui/sample-panel-renderer.js';
+import { APP_VERSION } from './version.js';
 
 class V11PeerDAW {
   constructor() {
@@ -95,8 +96,14 @@ class V11PeerDAW {
     this.suppressProjectBroadcast = false;
     this.clientId = `v11-client-${Math.random().toString(36).slice(2, 10)}`;
     this.localProjectVersion = 0;
+    this.lastAppliedProjectStamp = { version: 0, clientId: '' };
+    this.localProjectVersionsByClient = new Map();
+    this.resolvedLocalConflicts = new Set();
     this.localSessionPeers = new Map();
     this.localSessionBus = null;
+    this.localSessionHeartbeatTimer = null;
+    this.localSessionPruneTimer = null;
+    this.localSessionBeforeUnloadBound = false;
     this.gridSelection = new Set();
     this.gridDrag = null;
     this.gridClipboard = [];
@@ -126,7 +133,20 @@ class V11PeerDAW {
     });
   }
 
+  rebroadcastWinningLocalProject(losingStamp = {}) {
+    const winner = this.lastAppliedProjectStamp;
+    if (winner.clientId !== this.clientId || losingStamp.clientId === this.clientId) return;
+    const conflictKey = `${losingStamp.version}:${losingStamp.clientId}->${winner.version}:${winner.clientId}`;
+    if (this.resolvedLocalConflicts.has(conflictKey)) return;
+    this.resolvedLocalConflicts.add(conflictKey);
+    if (this.resolvedLocalConflicts.size > 100) {
+      this.resolvedLocalConflicts.delete(this.resolvedLocalConflicts.values().next().value);
+    }
+    this.publishLocalSessionProject('conflict-resolution');
+  }
+
   async init() {
+    this.renderAppVersion();
     this.createStarfield();
     this.bindExampleProjects();
     this.bindChrome();
@@ -151,14 +171,42 @@ class V11PeerDAW {
     this.autoJoinFromUrl();
   }
 
-  bindLocalSessionBus() {
-    if (this.localSessionBus || !('BroadcastChannel' in window)) return;
+  closeLocalSessionBus({ announce = false } = {}) {
+    if (announce) this.announceLocalSessionPresence('leave');
+    window.clearInterval(this.localSessionHeartbeatTimer);
+    window.clearInterval(this.localSessionPruneTimer);
+    this.localSessionHeartbeatTimer = null;
+    this.localSessionPruneTimer = null;
+    this.localSessionBus?.close?.();
+    this.localSessionBus = null;
+    this.localSessionPeers.clear();
+    this.localProjectVersion = 0;
+    this.lastAppliedProjectStamp = { version: 0, clientId: '' };
+    this.localProjectVersionsByClient.clear();
+    this.resolvedLocalConflicts.clear();
+    this.renderPeerCounts();
+  }
+
+  bindLocalSessionBus({ force = false } = {}) {
+    if (!('BroadcastChannel' in window)) return;
+    if (force) this.closeLocalSessionBus({ announce: true });
+    if (this.localSessionBus) return;
     this.localSessionBus = new BroadcastChannel(`v11-peer-daw:${this.defaultSessionCode}`);
     this.localSessionBus.addEventListener('message', (event) =>
       this.handleLocalSessionMessage(event.data || {})
     );
     this.announceLocalSessionPresence('join');
-    window.addEventListener('beforeunload', () => this.announceLocalSessionPresence('leave'));
+    this.localSessionHeartbeatTimer = window.setInterval(
+      () => this.announceLocalSessionPresence('heartbeat'),
+      10000
+    );
+    this.localSessionPruneTimer = window.setInterval(() => this.pruneLocalSessionPeers(), 5000);
+    if (!this.localSessionBeforeUnloadBound) {
+      this.localSessionBeforeUnloadBound = true;
+      window.addEventListener('beforeunload', () =>
+        this.closeLocalSessionBus({ announce: true })
+      );
+    }
   }
 
   announceLocalSessionPresence(kind = 'presence') {
@@ -171,6 +219,17 @@ class V11PeerDAW {
       sessionCode: this.defaultSessionCode,
       at: Date.now(),
     });
+  }
+
+  pruneLocalSessionPeers(maxAgeMs = 30000) {
+    const cutoff = Date.now() - maxAgeMs;
+    let changed = false;
+    for (const [clientId, peer] of this.localSessionPeers) {
+      if (Number(peer.at || 0) >= cutoff) continue;
+      this.localSessionPeers.delete(clientId);
+      changed = true;
+    }
+    if (changed) this.updateSessionUI();
   }
 
   handleLocalSessionMessage(message = {}) {
@@ -188,20 +247,40 @@ class V11PeerDAW {
           name: message.username || 'peer',
           at: message.at || Date.now(),
         });
+      if (message.kind === 'join') this.announceLocalSessionPresence('heartbeat');
       this.updateSessionUI();
       return;
     }
     if (message.type === 'project-update') {
-      if ((message.version || 0) <= this.localProjectVersion) return;
-      this.localProjectVersion = message.version || this.localProjectVersion;
+      const incomingVersion = Number(message.version || 0);
+      const seenVersion = Number(this.localProjectVersionsByClient.get(message.clientId) || 0);
+      if (incomingVersion <= seenVersion) return;
+      this.localProjectVersionsByClient.set(message.clientId, incomingVersion);
+      this.localProjectVersion = Math.max(this.localProjectVersion, incomingVersion);
+      const incomingStamp = { version: incomingVersion, clientId: String(message.clientId || '') };
+      if (this.compareProjectStamp(incomingStamp, this.lastAppliedProjectStamp) <= 0) {
+        this.rebroadcastWinningLocalProject(incomingStamp);
+        return;
+      }
+      this.lastAppliedProjectStamp = incomingStamp;
       this.logText(`local session project update: ${message.reason || 'remote-change'}`);
       this.applyRemoteProject(message.project);
     }
   }
 
+  compareProjectStamp(a = {}, b = {}) {
+    const versionDelta = Number(a.version || 0) - Number(b.version || 0);
+    if (versionDelta) return versionDelta;
+    return String(a.clientId || '').localeCompare(String(b.clientId || ''));
+  }
+
   publishLocalSessionProject(reason = 'local-change') {
     if (!this.localSessionBus || this.suppressProjectBroadcast) return;
     this.localProjectVersion += 1;
+    this.lastAppliedProjectStamp = {
+      version: this.localProjectVersion,
+      clientId: this.clientId,
+    };
     this.localSessionBus.postMessage({
       type: 'project-update',
       clientId: this.clientId,
@@ -258,9 +337,21 @@ class V11PeerDAW {
     this.logText(`example loaded: ${example.title}`);
   }
 
+  renderAppVersion() {
+    const badge = document.querySelector('#appVersion');
+    if (badge) badge.textContent = `v${APP_VERSION}`;
+    document.documentElement.dataset.appVersion = APP_VERSION;
+  }
+
   createStarfield() {
     const root = document.querySelector('#starfield');
-    root.innerHTML = Array.from({ length: 120 }, (_, _i) => {
+    if (!root) return;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const lowPower =
+      Number(navigator.hardwareConcurrency || 8) <= 4 || Number(navigator.deviceMemory || 8) <= 4;
+    const count = reducedMotion ? 0 : lowPower ? 36 : 72;
+    root.dataset.density = lowPower ? 'low' : 'normal';
+    root.innerHTML = Array.from({ length: count }, (_, _i) => {
       const x = Math.random() * 100;
       const y = Math.random() * 100;
       const s = 1 + Math.random() * 2;
@@ -268,6 +359,33 @@ class V11PeerDAW {
       const opacity = 0.3 + Math.random() * 0.7;
       return `<i style="left:${x}%;top:${y}%;width:${s}px;height:${s}px;animation-duration:${d}s;--opacity:${opacity}"></i>`;
     }).join('');
+    document.addEventListener('visibilitychange', () => {
+      root.classList.toggle('paused', document.hidden);
+    });
+  }
+
+  sessionInviteUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.set('session', this.sessionCode || this.defaultSessionCode);
+    url.searchParams.set(
+      'username',
+      document.querySelector('#pilotName')?.value?.trim() || 'pilot'
+    );
+    url.searchParams.delete('targetPeerId');
+    url.searchParams.delete('observe');
+    url.searchParams.delete('spectate');
+    return url.toString();
+  }
+
+  async copySessionInvite() {
+    const invite = this.sessionInviteUrl();
+    try {
+      await navigator.clipboard?.writeText?.(invite);
+      this.logText(`session invite copied: ${this.sessionCode || this.defaultSessionCode}`);
+    } catch {
+      window.prompt?.('Copy session invite', invite);
+      this.logText('session invite ready for manual copy');
+    }
   }
 
   bindChrome() {
@@ -308,6 +426,10 @@ class V11PeerDAW {
       }
     });
 
+    document
+      .querySelector('#btnCopyInvite')
+      ?.addEventListener('click', () => this.copySessionInvite());
+
     document.querySelector('#btnConnectPeer').addEventListener('click', async () => {
       await this.bootstrapDefaultPeernetSession({ force: true });
       this.logText('visible in app-hub lobby as V11 DAW');
@@ -317,6 +439,12 @@ class V11PeerDAW {
       const session = this.peernet.createSession('V11 Peer DAW Session');
       if (session) {
         this.sessionCode = session.code;
+        this.defaultSessionCode = session.code;
+        this.peernet.reconnect({
+          username: document.querySelector('#pilotName')?.value || 'pilot',
+          sessionCode: session.code,
+        });
+        this.bindLocalSessionBus({ force: true });
         this.updateSessionUI();
         this.logText(`session created: ${session.title}`);
       }
@@ -625,6 +753,16 @@ class V11PeerDAW {
         ? `last error: ${this.peernetHealth.lastError}`
         : `hub ${this.peernetHealth?.hubId || this.defaultSessionCode}`;
     }
+    const summary = document.querySelector('#sessionHealthSummary');
+    if (summary) {
+      const localCount = this.localSessionPeers.size;
+      const directCount = this.peerList.length;
+      summary.textContent = this.peernetHealth?.lastError
+        ? `${state} · ${role} · ${this.peernetHealth.lastError}`
+        : `${state} · ${role} · ${directCount} direct · ${localCount} local`;
+      summary.dataset.state = state;
+    }
+    this.renderPeerCounts();
     if (this.workspaceView === 'session') this.scheduleRender();
   }
 
@@ -1180,10 +1318,21 @@ class V11PeerDAW {
   setWorkspaceView(view) {
     this.workspaceView = view || 'session';
     document.querySelectorAll('[data-workspace-view]').forEach((button) => {
-      button.classList.toggle('active', button.dataset.workspaceView === this.workspaceView);
+      const active = button.dataset.workspaceView === this.workspaceView;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
     });
     this.workspacePreferences.saveWorkspaceView(this.workspaceView);
+    this.refreshFocusedModuleCard();
     this.renderWorkspaceView();
+  }
+
+  refreshFocusedModuleCard() {
+    this.modulesEl?.querySelectorAll('.module-card').forEach((card) => {
+      card.classList.toggle('focused-module', card.dataset.moduleId === this.focusedModuleId);
+    });
   }
 
   openSignalFlowForModule(moduleId) {
@@ -1869,7 +2018,7 @@ class V11PeerDAW {
     key,
     { min = 0, max = 1, step = 0.01, label = key, value = module[key] } = {}
   ) {
-    return `<label>${this.escapeHtml(label)} <input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="range" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}"></label>`;
+    return `<label class="control-label"><span>${this.escapeHtml(label)}</span><output data-control-readout>${this.escapeHtml(value ?? 0)}</output><input data-module-input="synth-param" data-module-id="${this.escapeHtml(module.id)}" data-param-key="${this.escapeHtml(key)}" type="range" min="${this.escapeHtml(min)}" max="${this.escapeHtml(max)}" step="${this.escapeHtml(step)}" value="${this.escapeHtml(value ?? 0)}" aria-label="${this.escapeHtml(label)}"></label>`;
   }
 
   synthNumber(
@@ -1950,10 +2099,15 @@ class V11PeerDAW {
     const rows = strips
       .map((module) => {
         const channel = this.ensureMixerChannel(module);
-        return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label>Level <input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}"></label><label>Pan <input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
+        return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label class="control-label"><span>Level</span><output data-control-readout>${this.escapeHtml(channel.gain)}</output><input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}" aria-label="${this.escapeHtml(channel.title || module.title)} level"></label><label class="control-label"><span>Pan</span><output data-control-readout>${this.escapeHtml(channel.pan)}</output><input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}" aria-label="${this.escapeHtml(channel.title || module.title)} pan"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
       })
       .join('');
-    return `<div class="workspace-toolbar"><label>Master <input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}"></label><button type="button" data-module-action="unsolo-all">UNSOLO ALL</button><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
+    return `<div class="workspace-toolbar"><label class="control-label compact"><span>Master</span><output data-control-readout>${this.escapeHtml(this.mixerState.masterVolume)}</output><input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}" aria-label="Master volume"></label><button type="button" data-module-action="unsolo-all">UNSOLO ALL</button><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
+  }
+
+  syncControlReadout(input) {
+    const output = input?.closest('label')?.querySelector('[data-control-readout]');
+    if (output) output.textContent = input.value;
   }
 
   applyMixerChannel(moduleId) {
@@ -2005,8 +2159,11 @@ class V11PeerDAW {
   }
 
   handleWorkspaceInput(event) {
-    const isLiveInput =
-      event.type === 'input' && (event.target.type === 'range' || event.target.type === 'number');
+    const isContinuousControl =
+      event.target.type === 'range' || event.target.type === 'number';
+    if (event.type === 'change' && isContinuousControl) return;
+    const isLiveInput = event.type === 'input' && isContinuousControl;
+    if (isContinuousControl) this.syncControlReadout(event.target);
     const arrangementInput = event.target.closest('[data-arrangement-input]');
     if (arrangementInput) {
       const kind = arrangementInput.dataset.arrangementInput;
@@ -2253,6 +2410,7 @@ class V11PeerDAW {
     if (!module) return;
     if (action === 'focus-module') {
       this.focusedModuleId = moduleId;
+      this.refreshFocusedModuleCard();
       this.setWorkspaceView('module');
       return;
     }
@@ -2367,7 +2525,7 @@ class V11PeerDAW {
         module.noteOn(note, 0.7);
         setTimeout(() => module.noteOff?.(note), 250);
       }
-      this.logText(`trigger: ${module.title} ${note}`);
+      this.logText(`drum pad trigger: ${module.title} ${note}`);
       return;
     }
     if (action === 'drum-load-pad-file') {
@@ -2886,7 +3044,26 @@ class V11PeerDAW {
             .join('')
         : '<div class="peer-item dim">local pilot waiting for peers</div>';
     }
+    this.renderPeerCounts();
     if (this.workspaceView === 'session') this.renderWorkspaceView();
+  }
+
+  renderPeerCounts() {
+    const direct = this.peerList.length;
+    const hub = Number(this.subLobby.snapshot()?.peers?.size || 0);
+    const local = this.localSessionPeers.size;
+    const total = direct + hub + local;
+    const values = {
+      directPeerCount: direct,
+      hubPeerCount: hub,
+      localPeerCount: local,
+    };
+    for (const [id, value] of Object.entries(values)) {
+      const node = document.querySelector(`#${id}`);
+      if (node) node.textContent = String(value);
+    }
+    const totalNode = document.querySelector('#peerCount');
+    if (totalNode) totalNode.textContent = `${total} peer${total === 1 ? '' : 's'}`;
   }
 
   async bootstrapDefaultPeernetSession({ force = false } = {}) {
@@ -2905,7 +3082,7 @@ class V11PeerDAW {
     if (force && this.peernet.started) this.peernet.reconnect(profile);
     else this.peernet.start(profile);
     const session = this.peernet.ensureSharedSession({
-      id: 'v11-peer-daw:open-studio',
+      id: `v11-peer-daw:session:${this.defaultSessionCode}`,
       code: this.defaultSessionCode,
       title: 'V11 Open Studio Session',
     });
@@ -2942,7 +3119,7 @@ class V11PeerDAW {
             .join('')
         : '<div class="peer-item dim">no sub-lobby peers yet</div>';
     }
-    document.querySelector('#peerCount').textContent = `${state.peers?.size || 0} hub peers`;
+    this.renderPeerCounts();
   }
 
   bindSampleLibrary() {
@@ -3249,7 +3426,11 @@ class V11PeerDAW {
   }
 
   autoJoinFromUrl() {
-    if (this.urlParams.get('multiplayer') !== 'true' && !this.targetPeerId && !this.sessionCode)
+    if (
+      this.urlParams.get('multiplayer') !== 'true' &&
+      !this.targetPeerId &&
+      !this.spectateMode
+    )
       return;
     const username =
       this.urlParams.get('username') || document.querySelector('#pilotName')?.value || 'pilot';
@@ -3259,12 +3440,6 @@ class V11PeerDAW {
     this.subLobby
       .connect()
       .catch((error) => this.logText(`app-hub lobby failed: ${error.message}`));
-    this.peernet.start({
-      username,
-      targetPeerId: this.targetPeerId,
-      spectate: this.spectateMode,
-      sessionCode: this.sessionCode,
-    });
     const target = this.targetPeerId ? ` for ${this.targetPeerId}` : '';
     this.logText(`${this.spectateMode ? 'observing' : 'joining'} peer session${target}`);
   }
@@ -3288,7 +3463,6 @@ class V11PeerDAW {
     this.peernet.addEventListener('health', (e) => this.renderPeernetHealth(e.detail));
     this.peernet.addEventListener('presence', (e) => {
       this.peerList = e.detail;
-      document.querySelector('#peerCount').textContent = `${e.detail.length} peers`;
       this.updateSessionUI();
     });
     this.peernet.addEventListener('storage', (e) => {
@@ -3328,6 +3502,7 @@ class V11PeerDAW {
     card.querySelector('.remove').addEventListener('click', () => this.removeModule(module.id));
     card.querySelector('.focus').addEventListener('click', () => {
       this.focusedModuleId = module.id;
+      this.refreshFocusedModuleCard();
       this.setWorkspaceView('module');
     });
 
@@ -3432,7 +3607,7 @@ class V11PeerDAW {
       ]
         .filter(Boolean)
         .join('') || '<li class="dim">no routes yet</li>';
-    this.updateTransportStats();
+    this.updateStats();
   }
 
   renderPatchCanvas() {

@@ -325,6 +325,12 @@ describe('synth modules', () => {
     );
   });
 
+  test('FM modulation index accepts an explicit zero value', () => {
+    const synth = new FmPhaseSynthModule({ modulationIndex: 2.5 });
+    synth.setParam('modulationIndex', '0');
+    expect(synth.modulationIndex).toBe(0);
+  });
+
   test('wavetable synth builds periodic waves, morphs tables, and serializes table state', async () => {
     const ctx = new FakeAudioContext();
     const synth = new WavetableSynthModule({

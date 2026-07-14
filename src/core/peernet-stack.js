@@ -16,6 +16,16 @@ export class PeernetStack extends EventTarget {
     this.lastHealth = null;
   }
 
+  hubIdForProfile(profile = {}) {
+    const session = String(profile.sessionCode || 'open-studio')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'open-studio';
+    return `${this.namespace}-${session}-hub`;
+  }
+
   available() {
     return Boolean(
       window.PeernetUserManager &&
@@ -35,7 +45,7 @@ export class PeernetStack extends EventTarget {
       this.core ||
       new window.PeernetSharedCore({
         namespace: this.namespace,
-        hubId: `${this.namespace}-hub-01`,
+        hubId: this.hubIdForProfile(profile),
         username: profile.username || 'pilot',
         color: profile.color || '#00ffff',
         debug: false,
@@ -75,6 +85,7 @@ export class PeernetStack extends EventTarget {
 
   reconnect(profile = {}) {
     if (!this.core && !this.init(profile)) return false;
+    this.core.hubId = this.hubIdForProfile(profile);
     this.core?.setIdentity?.(profile);
     this.core?.stop?.();
     this.started = false;
@@ -178,7 +189,13 @@ export class PeernetStack extends EventTarget {
     if (!this.sessions) return null;
     const existing = this.sessions.sessions.find((session) => session.id === id);
     if (existing) {
+      existing.code = code;
+      existing.title = title;
+      existing.mode = 'open-collab';
+      existing.updatedAt = Date.now();
       this.sessions.joinSession(existing);
+      this.sessions.save();
+      this.sessions.announceUpdate(existing);
       return this.sessions.getActiveSession();
     }
     const session = this.sessions.createSession({ title, app: 'V11 Peer DAW' }, this.capture());

@@ -21,7 +21,7 @@
           </svg>
         </div>
         <div>
-          <h1>V11 Peer DAW</h1>
+          <div class="brand-title-row"><h1>V11 Peer DAW</h1><span id="appVersion" class="version-badge">v--</span></div>
           <div class="subtitle">modular peer-to-peer audio workstation · autonomous modules · collaborative sessions</div>
         </div>
       </div>
@@ -99,7 +99,16 @@
             <button id="btnCreateSession" type="button">SESSION</button>
             <button id="btnSaveSnapshot" type="button">SNAP</button>
           </div>
+          <div class="button-row">
+            <button id="btnCopyInvite" type="button">COPY INVITE</button>
+          </div>
+          <div class="peer-count-grid" aria-label="Peer connection counts">
+            <span><strong id="directPeerCount">0</strong><small>direct</small></span>
+            <span><strong id="hubPeerCount">0</strong><small>hub</small></span>
+            <span><strong id="localPeerCount">0</strong><small>local</small></span>
+          </div>
           <p class="microcopy"><span id="peerCount">0 peers</span> · <span id="storageStatus">storage ready</span></p>
+          <p id="sessionHealthSummary" class="session-health-summary" aria-live="polite">network starting…</p>
           <p class="microcopy"><strong id="subLobbyStatus">sub-lobby: offline</strong></p>
           <label class="microcopy inline-check"><input id="blockIncomingJoin" type="checkbox"> block auto-join</label>
           <div class="button-row sub-lobby-actions">

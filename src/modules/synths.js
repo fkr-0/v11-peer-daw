@@ -491,9 +491,11 @@ export class FmPhaseSynthModule extends VoiceModuleBase {
   }
 
   setParam(target, value) {
-    if (target === 'carrierRatio') this.carrierRatio = Number(value) || this.carrierRatio;
-    if (target === 'modulatorRatio') this.modulatorRatio = Number(value) || this.modulatorRatio;
-    if (target === 'modulationIndex') this.modulationIndex = Number(value) || this.modulationIndex;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return;
+    if (target === 'carrierRatio') this.carrierRatio = numeric;
+    if (target === 'modulatorRatio') this.modulatorRatio = numeric;
+    if (target === 'modulationIndex') this.modulationIndex = numeric;
   }
 
   noteOn(note, velocity = 0.75, when = this.ctx?.currentTime || 0) {
