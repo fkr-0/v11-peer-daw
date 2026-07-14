@@ -26,6 +26,7 @@ export class MultiSamplerModule extends ModuleBase {
     if (!buffer) throw new Error('addSampleZone requires an AudioBuffer-like buffer');
     this.samples.set(rootNote, buffer);
     this.zones.push({
+      id: uid('zone'),
       rootNote,
       min: this.midi(minNote),
       max: this.midi(maxNote),
@@ -112,6 +113,7 @@ export class MultiSamplerModule extends ModuleBase {
       sliceCount: this.sliceCount,
       fileName: this.fileName,
       zones: this.zones.map((zone) => ({
+        id: zone.id,
         name: zone.name,
         rootNote: zone.rootNote,
         minNote: this.noteName(zone.min),
@@ -123,7 +125,8 @@ export class MultiSamplerModule extends ModuleBase {
   hydrate(data = {}) {
     this.sliceCount = data.sliceCount || this.sliceCount;
     this.fileName = data.fileName || this.fileName;
-    this.zones = (data.zones || []).map((zone) => ({
+    this.zones = (data.zones || []).map((zone, index) => ({
+      id: zone.id || `${this.id}-zone-${index + 1}`,
       name: zone.name || 'sample zone',
       rootNote: zone.rootNote || 'C4',
       min: this.midi(zone.minNote || 'C1'),

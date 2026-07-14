@@ -11,6 +11,21 @@ function round(value, digits = 6) {
   return Number(Number(value).toFixed(digits));
 }
 
+let arrangementPlacementSequence = 0;
+
+export function createPlacementId(prefix = 'placement') {
+  arrangementPlacementSequence += 1;
+  const random = globalThis.crypto?.randomUUID?.()?.slice(0, 8) || Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now().toString(36)}-${arrangementPlacementSequence.toString(36)}-${random}`;
+}
+
+export function legacyPlacementId(placement = {}, index = 0) {
+  const clipId = String(placement.clip?.id || 'clip').replace(/[^a-zA-Z0-9_-]/g, '-');
+  const trackId = String(placement.trackId || 'track').replace(/[^a-zA-Z0-9_-]/g, '-');
+  const beat = String(Number(placement.startBeat || 0)).replace('.', '_');
+  return `legacy-placement-${index + 1}-${clipId}-${trackId}-${beat}`;
+}
+
 export function quantizeBeat(beat = 0, quantizationBeats = 4) {
   const q = Math.max(0.000001, Number(quantizationBeats) || 4);
   const b = Number(beat) || 0;
@@ -201,6 +216,9 @@ export class Clip extends AutomationClip {
 
 export class ClipSlot {
   constructor(config = {}) {
+    this.id = config.id || `slot-${Math.random().toString(36).slice(2, 10)}`;
+    this.moduleId = config.moduleId || config.channelId || 'channel-1';
+    this.name = config.name || config.clip?.name || this.id;
     this.channelId = config.channelId || 'channel-1';
     this.quantizationBeats = Number(config.quantizationBeats ?? 4);
     this.clip = config.clip || null;
@@ -238,12 +256,22 @@ export class Arrangement {
     this.clips = [];
     this.loopStartBeat = Number(config.loopStartBeat ?? 0);
     this.loopEndBeat = Number(config.loopEndBeat ?? 0);
-    for (const placement of config.clips || []) this.placeClip(placement);
+    for (const [index, placement] of (config.clips || []).entries()) {
+      this.placeClip({
+        ...placement,
+        placementId: placement.placementId || legacyPlacementId(placement, index),
+      });
+    }
   }
 
-  placeClip({ clip, startBeat = 0, trackId = 'track-1' }) {
+  placeClip({ clip, startBeat = 0, trackId = 'track-1', placementId = '' }) {
     const normalizedClip = clip instanceof Clip ? clip : new Clip(clip);
-    const placement = { clip: normalizedClip, startBeat: Number(startBeat), trackId };
+    const placement = {
+      placementId: placementId || createPlacementId(),
+      clip: normalizedClip,
+      startBeat: Number(startBeat),
+      trackId,
+    };
     this.clips.push(placement);
     return placement;
   }
@@ -270,7 +298,8 @@ export class Arrangement {
     return {
       loopStartBeat: this.loopStartBeat,
       loopEndBeat: this.loopEndBeat,
-      clips: this.clips.map(({ clip, startBeat, trackId }) => ({
+      clips: this.clips.map(({ placementId, clip, startBeat, trackId }) => ({
+        placementId,
         clip: clip.serialize(),
         startBeat,
         trackId,

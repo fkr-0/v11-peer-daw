@@ -10,6 +10,34 @@ export function serializeMixerState(mixerState = {}) {
   };
 }
 
+export function normalizeProjectStableIds(projectInput = {}) {
+  const project = typeof structuredClone === 'function'
+    ? structuredClone(projectInput)
+    : JSON.parse(JSON.stringify(projectInput));
+  project.clips ||= { currentBeat: 0, slots: [] };
+  project.clips.slots = Array.from(project.clips.slots || []).map((slot, index) => ({
+    ...slot,
+    id: slot.id || `legacy-slot-${index + 1}`,
+  }));
+  project.arrangement ||= { loopStartBeat: 0, loopEndBeat: 16, clips: [] };
+  project.arrangement.clips = Array.from(project.arrangement.clips || []).map((placement, index) => ({
+    ...placement,
+    placementId:
+      placement.placementId ||
+      `legacy-placement-${index + 1}-${String(placement.clip?.id || 'clip').replace(/[^a-zA-Z0-9_-]/g, '-')}-${String(placement.trackId || 'track').replace(/[^a-zA-Z0-9_-]/g, '-')}-${String(Number(placement.startBeat || 0)).replace('.', '_')}`,
+  }));
+  project.modules = Array.from(project.modules || []).map((module) => ({
+    ...module,
+    notes: Array.isArray(module.notes)
+      ? module.notes.map((note, index) => ({ ...note, id: note.id || `${module.id || 'module'}-note-${index + 1}` }))
+      : module.notes,
+    zones: Array.isArray(module.zones)
+      ? module.zones.map((zone, index) => ({ ...zone, id: zone.id || `${module.id || 'module'}-zone-${index + 1}` }))
+      : module.zones,
+  }));
+  return project;
+}
+
 export function serializeClipState({ currentBeat = 0, clipSlots = [] } = {}) {
   return {
     currentBeat,
