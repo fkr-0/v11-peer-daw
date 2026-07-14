@@ -86,11 +86,12 @@ class V11PeerDAW {
 
     // Session state
     this.urlParams = new URLSearchParams(window.location.search);
-    this.sessionCode = this.urlParams.get('session') || null;
+    this.sessionCode = this.normalizeSessionCode(this.urlParams.get('session')) || null;
     this.targetPeerId = this.urlParams.get('targetPeerId') || '';
     this.spectateMode =
       this.urlParams.get('spectate') === 'true' || this.urlParams.get('observe') === 'true';
-    this.defaultSessionCode = this.urlParams.get('session') || 'V11-OPEN-STUDIO';
+    this.defaultSessionCode =
+      this.normalizeSessionCode(this.urlParams.get('session')) || 'V11-OPEN-STUDIO';
     this.peerList = [];
     this.workspaceView = 'session';
     this.suppressProjectBroadcast = false;
@@ -103,7 +104,11 @@ class V11PeerDAW {
     this.localSessionBus = null;
     this.localSessionHeartbeatTimer = null;
     this.localSessionPruneTimer = null;
+    this.localSessionSyncTimer = null;
     this.localSessionBeforeUnloadBound = false;
+    this.localSyncStatus = 'starting';
+    this.localSyncRequestId = null;
+    this.lastLocalSyncAt = 0;
     this.gridSelection = new Set();
     this.gridDrag = null;
     this.gridClipboard = [];
@@ -131,6 +136,132 @@ class V11PeerDAW {
       autoCreateWhenAlone: false,
       autoJoinOffers: true,
     });
+  }
+
+  renderLocalSyncStatus() {
+    const node = document.querySelector('#projectSyncSummary');
+    if (!node) return;
+    const labels = {
+      starting: 'starting…',
+      requesting: 'requesting room snapshot…',
+      synced: 'synced',
+      published: 'local change published',
+      resolved: 'conflict resolved',
+      'local-only': 'local-only · no room snapshot received',
+      unavailable: 'local-only · browser channel unavailable',
+    };
+    const time = this.lastLocalSyncAt
+      ? ` · ${new Date(this.lastLocalSyncAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })}`
+      : '';
+    node.textContent = `project sync: ${labels[this.localSyncStatus] || this.localSyncStatus}${time} · v${this.localProjectVersion}`;
+    node.dataset.state = this.localSyncStatus;
+  }
+
+  normalizeSessionCode(value) {
+    const normalized = String(value || '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .toUpperCase()
+      .slice(0, 48);
+    return normalized || null;
+  }
+
+  updateSessionUrl(code) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('session', code);
+    window.history?.replaceState?.({}, '', url);
+    this.urlParams = new URLSearchParams(url.search);
+  }
+
+  async switchSessionCode(value, { updateUrl = true } = {}) {
+    const nextCode = this.normalizeSessionCode(value);
+    if (!nextCode) {
+      this.logText('room switch ignored: enter a valid room code');
+      return null;
+    }
+    if (nextCode === this.defaultSessionCode && this.localSessionBus) {
+      this.requestLocalSessionProject();
+      return this.peernet.sessions?.getActiveSession?.() || null;
+    }
+    this.closeLocalSessionBus({ announce: true });
+    this.defaultSessionCode = nextCode;
+    this.sessionCode = nextCode;
+    if (updateUrl) this.updateSessionUrl(nextCode);
+    const session = await this.bootstrapDefaultPeernetSession({ force: true });
+    this.bindLocalSessionBus();
+    this.updateSessionUI();
+    this.logText(`room switched: ${nextCode}`);
+    return session;
+  }
+
+  requestLocalSessionProject() {
+    if (!this.localSessionBus) {
+      this.localSyncStatus = 'unavailable';
+      this.renderLocalSyncStatus();
+      return null;
+    }
+    const requestId = `${this.clientId}:${Date.now().toString(36)}`;
+    this.localSyncRequestId = requestId;
+    this.localSyncStatus = 'requesting';
+    this.renderLocalSyncStatus();
+    this.localSessionBus.postMessage({
+      type: 'project-request',
+      clientId: this.clientId,
+      sessionCode: this.defaultSessionCode,
+      requestId,
+      at: Date.now(),
+    });
+    window.clearTimeout(this.localSessionSyncTimer);
+    this.localSessionSyncTimer = window.setTimeout(() => {
+      if (this.localSyncRequestId !== requestId || this.localSyncStatus !== 'requesting') return;
+      this.localSyncStatus = 'local-only';
+      this.renderLocalSyncStatus();
+    }, 1400);
+    return requestId;
+  }
+
+  sendLocalProjectSnapshot(message = {}) {
+    if (!this.localSessionBus || !message.clientId || !message.requestId) return;
+    this.localSessionBus.postMessage({
+      type: 'project-snapshot',
+      clientId: this.clientId,
+      targetClientId: message.clientId,
+      sessionCode: this.defaultSessionCode,
+      requestId: message.requestId,
+      version: this.localProjectVersion,
+      stamp: this.lastAppliedProjectStamp,
+      project: this.serializeRig(),
+      at: Date.now(),
+    });
+    this.renderLocalSyncStatus();
+  }
+
+  applyLocalProjectSnapshot(message = {}) {
+    if (message.targetClientId !== this.clientId || message.requestId !== this.localSyncRequestId)
+      return;
+    const stamp = message.stamp || {
+      version: Number(message.version || 0),
+      clientId: String(message.clientId || ''),
+    };
+    if (this.compareProjectStamp(stamp, this.lastAppliedProjectStamp) < 0) return;
+    this.localProjectVersion = Math.max(
+      this.localProjectVersion,
+      Number(message.version || 0),
+      Number(stamp.version || 0)
+    );
+    this.lastAppliedProjectStamp = stamp;
+    this.localSyncStatus = 'synced';
+    this.lastLocalSyncAt = Date.now();
+    window.clearTimeout(this.localSessionSyncTimer);
+    this.localSessionSyncTimer = null;
+    this.logText(`local session snapshot received from ${message.clientId}`);
+    this.applyRemoteProject(message.project);
+    this.renderLocalSyncStatus();
   }
 
   rebroadcastWinningLocalProject(losingStamp = {}) {
@@ -175,8 +306,10 @@ class V11PeerDAW {
     if (announce) this.announceLocalSessionPresence('leave');
     window.clearInterval(this.localSessionHeartbeatTimer);
     window.clearInterval(this.localSessionPruneTimer);
+    window.clearTimeout(this.localSessionSyncTimer);
     this.localSessionHeartbeatTimer = null;
     this.localSessionPruneTimer = null;
+    this.localSessionSyncTimer = null;
     this.localSessionBus?.close?.();
     this.localSessionBus = null;
     this.localSessionPeers.clear();
@@ -184,11 +317,19 @@ class V11PeerDAW {
     this.lastAppliedProjectStamp = { version: 0, clientId: '' };
     this.localProjectVersionsByClient.clear();
     this.resolvedLocalConflicts.clear();
+    this.localSyncStatus = 'local-only';
+    this.localSyncRequestId = null;
+    this.lastLocalSyncAt = 0;
     this.renderPeerCounts();
+    this.renderLocalSyncStatus();
   }
 
   bindLocalSessionBus({ force = false } = {}) {
-    if (!('BroadcastChannel' in window)) return;
+    if (!('BroadcastChannel' in window)) {
+      this.localSyncStatus = 'unavailable';
+      this.renderLocalSyncStatus();
+      return;
+    }
     if (force) this.closeLocalSessionBus({ announce: true });
     if (this.localSessionBus) return;
     this.localSessionBus = new BroadcastChannel(`v11-peer-daw:${this.defaultSessionCode}`);
@@ -201,6 +342,7 @@ class V11PeerDAW {
       10000
     );
     this.localSessionPruneTimer = window.setInterval(() => this.pruneLocalSessionPeers(), 5000);
+    this.requestLocalSessionProject();
     if (!this.localSessionBeforeUnloadBound) {
       this.localSessionBeforeUnloadBound = true;
       window.addEventListener('beforeunload', () =>
@@ -251,6 +393,14 @@ class V11PeerDAW {
       this.updateSessionUI();
       return;
     }
+    if (message.type === 'project-request') {
+      this.sendLocalProjectSnapshot(message);
+      return;
+    }
+    if (message.type === 'project-snapshot') {
+      this.applyLocalProjectSnapshot(message);
+      return;
+    }
     if (message.type === 'project-update') {
       const incomingVersion = Number(message.version || 0);
       const seenVersion = Number(this.localProjectVersionsByClient.get(message.clientId) || 0);
@@ -263,8 +413,11 @@ class V11PeerDAW {
         return;
       }
       this.lastAppliedProjectStamp = incomingStamp;
+      this.localSyncStatus = 'synced';
+      this.lastLocalSyncAt = Date.now();
       this.logText(`local session project update: ${message.reason || 'remote-change'}`);
       this.applyRemoteProject(message.project);
+      this.renderLocalSyncStatus();
     }
   }
 
@@ -281,6 +434,8 @@ class V11PeerDAW {
       version: this.localProjectVersion,
       clientId: this.clientId,
     };
+    this.localSyncStatus = reason === 'conflict-resolution' ? 'resolved' : 'published';
+    this.lastLocalSyncAt = Date.now();
     this.localSessionBus.postMessage({
       type: 'project-update',
       clientId: this.clientId,
@@ -291,6 +446,7 @@ class V11PeerDAW {
       project: this.serializeRig(),
       at: Date.now(),
     });
+    this.renderLocalSyncStatus();
   }
 
   bindExampleProjects() {
@@ -429,6 +585,19 @@ class V11PeerDAW {
     document
       .querySelector('#btnCopyInvite')
       ?.addEventListener('click', () => this.copySessionInvite());
+    document
+      .querySelector('#btnSyncSession')
+      ?.addEventListener('click', () => this.requestLocalSessionProject());
+    document
+      .querySelector('#btnJoinSession')
+      ?.addEventListener('click', () =>
+        this.switchSessionCode(document.querySelector('#sessionCodeInput')?.value)
+      );
+    document.querySelector('#sessionCodeInput')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      this.switchSessionCode(event.currentTarget.value);
+    });
 
     document.querySelector('#btnConnectPeer').addEventListener('click', async () => {
       await this.bootstrapDefaultPeernetSession({ force: true });
@@ -438,15 +607,9 @@ class V11PeerDAW {
     document.querySelector('#btnCreateSession').addEventListener('click', () => {
       const session = this.peernet.createSession('V11 Peer DAW Session');
       if (session) {
-        this.sessionCode = session.code;
-        this.defaultSessionCode = session.code;
-        this.peernet.reconnect({
-          username: document.querySelector('#pilotName')?.value || 'pilot',
-          sessionCode: session.code,
-        });
-        this.bindLocalSessionBus({ force: true });
-        this.updateSessionUI();
-        this.logText(`session created: ${session.title}`);
+        this.switchSessionCode(session.code).then(() =>
+          this.logText(`session created: ${session.title}`)
+        );
       }
     });
 
@@ -3021,6 +3184,8 @@ class V11PeerDAW {
     this.sessionCode = code;
 
     if (codeEl) codeEl.textContent = code;
+    const codeInput = document.querySelector('#sessionCodeInput');
+    if (codeInput && document.activeElement !== codeInput) codeInput.value = code;
 
     const participants = activeSession?.participants || [];
     const remotePeers = this.peerList.map((p) => ({

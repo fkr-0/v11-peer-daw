@@ -19,10 +19,10 @@ Track full-pane module editor coverage. Compact module cards are useful as overv
 | `clock`, `metronome` | transport | started | Add tap tempo, swing/groove, transport timeline control. |
 | `effects`, `reverb`, `dubecho`, `delay`, `tapeecho`, `flanger`, `phaser`, `beatrepeat`, `beatlooper`, `graindelay`, `pitchshift` | effects | started | Add per-effect visual feedback, preset A/B, automation lanes. |
 | `synth`, `cleansynth`, `polysynth`, `analogsynth`, `fmsynth`, `wavetablesynth`, `drumsynth` | instruments | started | Add oscillator/envelope/filter-specific panels and patch presets. |
-| `sampler`, `drumsampler`, `multisampler` | sampling | todo | Add waveform/slice/pad editor and sample assignment from global library. |
-| `ocra`, `sequencer`, `basicseq`, `arp` | sequencing | todo | Add focused grid/pattern editor, probability, scales, and lane controls. |
-| `field` | capture | todo | Add recording timeline, take list, trim/export controls. |
-| `peer`, `wiring` | collaboration/routing | todo | Add peer-routing matrix, packet monitor filters, and connection health. |
+| `sampler`, `drumsampler`, `multisampler` | sampling | started | Waveform, pad, cue, zone, metadata, and library-assignment editors exist; deepen slice visualization and repair UX. |
+| `ocra`, `sequencer`, `basicseq`, `arp` | sequencing | started | Focused grid/pattern editors exist; add probability, scale lanes, and richer clip export. |
+| `field` | capture | started | Take list, trim metadata, playback, and sample promotion exist; add recording timeline/export. |
+| `peer`, `wiring` | collaboration/routing | started | Route and packet monitor exists; add packet filters, per-route health, and direct-peer diagnostics. |
 
 ## Implemented first batch
 

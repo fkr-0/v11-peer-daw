@@ -37,29 +37,31 @@ Make V11 Peer DAW usable as a collaborative browser DAW, not only a patching dem
 - Clip, arrangement, mixer, and module views expose serious state instead of placeholder sidebar text.
 - Peer status warnings are rendered instead of crashing when PeerJS transport is unavailable.
 
+## Implemented through 1.1.1
+
+- Editable clip slots, launch/stop/place operations, and project persistence.
+- Full piano-roll and pattern editing paths with keyboard/grid operations.
+- Serious mixer controls with master/channel level, pan, mute, and solo state.
+- Two-client convergence and deterministic simultaneous-edit verification.
+- Session-specific hubs, local presence heartbeat/pruning, and late-join room snapshots.
+- Manual room-code joining, invite copying, sync status, and explicit sync recovery.
+
 ## Next implementation slices
 
-### Slice 2: editable clips
+### Slice 6: operation-level collaboration
 
-- Bind clips view to `src/core/clips-arrangement.js`.
-- Add clip create/delete buttons.
-- Add quantized launch/stop operations.
-- Persist clip slots in project export/import.
+- Replace whole-project last-writer-wins messages with typed operations where practical.
+- Keep snapshot exchange for bootstrap and recovery.
+- Add revision acknowledgements and explicit conflict indicators.
 
-### Slice 3: full piano roll view
+### Slice 7: remote transport diagnostics
 
-- Use focused module view for piano-roll modules.
-- Add note grid, velocity lane, and automation lane preview.
-- Add keyboard shortcuts for drawing/deleting notes.
+- Show direct PeerJS, App Hub sub-lobby, and local-channel health independently.
+- Add reconnect attempts, last packet timestamps, and route-level failure state.
+- Verify remote-room hydration through the actual Peernet transport, not only BroadcastChannel.
 
-### Slice 4: serious mixer
+### Slice 8: mixer and module depth
 
-- Expand mixer view with per-channel level, mute, solo, pan, and routing target.
-- Keep mini mixer strip as overview only.
-- Persist mixer state in project JSON.
-
-### Slice 5: real multi-client verification
-
-- Add a mock PeerJS transport for deterministic two-page e2e tests.
-- Verify two browser pages enter `V11-OPEN-STUDIO` and converge on session participants/project state.
-- Verify a module added by one page appears on the other page.
+- Add real meters, sends, grouping, and bus routing.
+- Add packet filters and route health to peer/wiring editors.
+- Complete field-recorder export and sampler slice visualization.

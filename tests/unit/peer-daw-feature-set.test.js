@@ -154,13 +154,21 @@ describe('consolidated V11 peer DAW catalog', () => {
 
   test('peer session panel exposes sub-lobby multiplayer controls', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
 
+    expect(html).toContain('id="sessionCodeInput"');
+    expect(html).toContain('id="btnJoinSession"');
+    expect(html).toContain('id="btnSyncSession"');
+    expect(html).toContain('id="projectSyncSummary"');
     expect(html).toContain('id="subLobbyStatus"');
     expect(html).toContain('id="btnHostSubLobby"');
     expect(html).toContain('id="btnNewSubLobby"');
     expect(html).toContain('id="btnCarrySubLobby"');
     expect(html).toContain('id="blockIncomingJoin"');
     expect(html).toContain('id="subLobbyPeerList"');
+    expect(app).toContain("type: 'project-request'");
+    expect(app).toContain("type: 'project-snapshot'");
+    expect(app).toContain('switchSessionCode');
   });
 
   test('project level exposes missing-sample and sample-library panels', () => {

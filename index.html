@@ -94,13 +94,18 @@
           <h2>Session</h2>
           <input id="pilotName" class="mini-input" value="pilot" aria-label="Pilot name">
           <div id="sessionCode" class="session-code"></div>
+          <label class="session-code-control">Room code
+            <input id="sessionCodeInput" class="mini-input" value="V11-OPEN-STUDIO" maxlength="48" autocomplete="off" spellcheck="false">
+          </label>
           <div class="button-row">
             <button id="btnConnectPeer" type="button">CONNECT</button>
             <button id="btnCreateSession" type="button">SESSION</button>
+            <button id="btnJoinSession" type="button">JOIN ROOM</button>
             <button id="btnSaveSnapshot" type="button">SNAP</button>
           </div>
           <div class="button-row">
             <button id="btnCopyInvite" type="button">COPY INVITE</button>
+            <button id="btnSyncSession" type="button">SYNC NOW</button>
           </div>
           <div class="peer-count-grid" aria-label="Peer connection counts">
             <span><strong id="directPeerCount">0</strong><small>direct</small></span>
@@ -109,6 +114,7 @@
           </div>
           <p class="microcopy"><span id="peerCount">0 peers</span> · <span id="storageStatus">storage ready</span></p>
           <p id="sessionHealthSummary" class="session-health-summary" aria-live="polite">network starting…</p>
+          <p id="projectSyncSummary" class="project-sync-summary" aria-live="polite">project sync: starting…</p>
           <p class="microcopy"><strong id="subLobbyStatus">sub-lobby: offline</strong></p>
           <label class="microcopy inline-check"><input id="blockIncomingJoin" type="checkbox"> block auto-join</label>
           <div class="button-row sub-lobby-actions">

@@ -1,31 +1,31 @@
-# Big Errors
+# V11 Peer DAW remaining work
 
-The arrangement, clip, session views do not exist and are a mere stub, so 
+The original workspace-stub issues are resolved: Session, Signal Flow, Clips,
+Samples, Arrangement, Mixer, and focused Module views now exist and are covered
+by browser tests. This file tracks the remaining high-value work.
 
-## module-ui's
-while the  mini view in bottom pane is cool and a nice "overview", each module should have 
-their own regular view spanning the pane that is otherwise covered from patching graph (maybe tabbed?)
+## Collaboration
 
-Detailed per-module tracking now lives in `docs/MODULE_UI_BACKLOG.md`.
+- Move frequent edits from whole-project snapshots toward typed operations.
+- Add revision acknowledgements and a visible unresolved-conflict state.
+- Verify initial project hydration through remote Peernet/PeerJS clients.
+- Add retry/backoff and last-message timestamps for every transport layer.
 
-Current focused module UI coverage:
-- master mixer / mixer desk: started, serious mixer view exists
-- piano roll: started/done, full-pane note editor exists
-- universal module inspector: started for every module
-- clock/synth/effect focused controls: first batch started
+## Mixer
 
-especially: 
-- master mixer should allow a real mixing interface
-- piano roll for editing notes
-- sampler/drum-sampler/multisampler should get waveform and pad/slice editors
-- OCRA/sequencer/arp should get focused pattern editors
-- field recorder should get take management
-- peer/wiring should get a packet routing monitor
+- Add live peak/RMS meters.
+- Add bus routing, sends, channel grouping, and routing-target controls.
+- Preserve the compact bottom mixer as an overview only.
 
+## Focused module editors
 
-## session
-## clip
-## arrangement
-## master mixer
-- view is also not really there
+- Samplers: deeper slice visualization and missing-sample repair.
+- OCRA/sequencer/arp: probability, scales, lanes, and richer clip export.
+- Field recorder: real recording timeline and take export.
+- Peer/wiring: packet filters, route health, and direct-peer diagnostics.
 
+## Performance and reliability
+
+- Split the large application controller into collaboration, workspace, and UI modules.
+- Avoid rebuilding full workspace HTML for controls that can update incrementally.
+- Add long-session soak tests for peer reconnects, repeated room switches, and audio graph cleanup.

@@ -4,6 +4,24 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.1] - 2026-07-14
+
+### Added
+
+- Automatic room-snapshot requests so a late joiner receives the current project without waiting for another edit.
+- A visible project-sync status with version, last synchronization time, local-only fallback, and manual `SYNC NOW` recovery.
+- A room-code input and `JOIN ROOM` action, including Enter-key submission and canonical invite-compatible room codes.
+
+### Changed
+
+- Room switches now close the previous local channel cleanly, reconnect the session-specific PeerJS hub, update the URL, and request the destination room state.
+- Collaboration E2E coverage now includes late joining and manual room switching in addition to live convergence and simultaneous-edit resolution.
+
+### Fixed
+
+- New clients no longer start with a stale default rig when the room already contains edits.
+- Session creation and room switching no longer announce a leave event with the destination room code on the old channel.
+
 ## [1.1.0] - 2026-07-14
 
 ### Added
@@ -39,5 +57,6 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 
 - Initial standalone V11 Peer DAW repository and modular collaborative workstation baseline.
 
+[1.1.1]: https://github.com/fkr-0/v11-peer-daw/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/fkr-0/v11-peer-daw/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/fkr-0/v11-peer-daw/releases/tag/v1.0.0
