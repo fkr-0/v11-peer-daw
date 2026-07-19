@@ -64,6 +64,7 @@ import {
   renderSampleLibraryMatrixHtml,
   renderSampleLibraryTreeHtml,
 } from './ui/sample-panel-renderer.js';
+import { PerformanceMonitor } from './ui/performance-monitor.js';
 import { SyncCenter, compactSyncLabel } from './ui/sync-center.js';
 import { APP_VERSION } from './version.js';
 
@@ -92,6 +93,18 @@ class V11PeerDAW {
     this.selectedSampleId = null;
     this.currentBeat = 0;
     this.mixerState = { masterVolume: 0.8, channels: {} };
+    this.performanceMonitor = new PerformanceMonitor({
+      root: document.querySelector('#performanceMonitor'),
+      runtime: this.runtime,
+      getStats: () => ({
+        modules: this.patchBay.modules.size,
+        routes: this.patchBay.routes.length,
+        pending: this.collaboration?.journal?.pending?.length || 0,
+      }),
+      onModeChange: (enabled) => {
+        document.documentElement.dataset.lowPower = enabled ? 'true' : 'false';
+      },
+    });
     this.clipSlotSequence = 1;
     this.clipSlots = [];
     this.arrangement = new Arrangement({ loopStartBeat: 0, loopEndBeat: 16 });
@@ -713,6 +726,7 @@ class V11PeerDAW {
     this.bindCommandCenter();
     this.bindModuleSearch();
     this.bindTransportBar();
+    this.performanceMonitor.bind();
     this.patchBay.addEventListener('packet', (e) => this.logPacket(e.detail));
     this.patchBay.addEventListener('route:add', () => this.renderRoutes());
     this.bindPatchCanvas();
@@ -3068,7 +3082,7 @@ class V11PeerDAW {
         return `<article class="mixer-channel ${channel.muted ? 'muted' : ''} ${channel.solo ? 'solo' : ''}"><strong>${this.escapeHtml(channel.title || module.title)}</strong><small>${this.escapeHtml(module.kind)} · ${this.escapeHtml(module.id)}</small><label class="control-label"><span>Level</span><output data-control-readout>${this.escapeHtml(channel.gain)}</output><input data-module-input="mixer-gain" data-module-id="${this.escapeHtml(module.id)}" type="range" min="0" max="1.5" step="0.01" value="${this.escapeHtml(channel.gain)}" aria-label="${this.escapeHtml(channel.title || module.title)} level"></label><label class="control-label"><span>Pan</span><output data-control-readout>${this.escapeHtml(channel.pan)}</output><input data-module-input="mixer-pan" data-module-id="${this.escapeHtml(module.id)}" type="range" min="-1" max="1" step="0.01" value="${this.escapeHtml(channel.pan)}" aria-label="${this.escapeHtml(channel.title || module.title)} pan"></label><div class="button-row"><button type="button" data-module-action="toggle-mute" data-module-id="${this.escapeHtml(module.id)}">${channel.muted ? 'UNMUTE' : 'MUTE'}</button><button type="button" data-module-action="toggle-solo" data-module-id="${this.escapeHtml(module.id)}">${channel.solo ? 'UNSOLO' : 'SOLO'}</button><button type="button" data-module-action="focus-module" data-module-id="${this.escapeHtml(module.id)}">FOCUS</button></div><span class="pill">${Math.round(channel.gain * 100)}% · pan ${channel.pan.toFixed(2)}</span></article>`;
       })
       .join('');
-    return `<div class="workspace-toolbar"><label class="control-label compact"><span>Master</span><output data-control-readout>${this.escapeHtml(this.mixerState.masterVolume)}</output><input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}" aria-label="Master volume"></label><button type="button" data-module-action="unsolo-all">UNSOLO ALL</button><span class="microcopy">${strips.length} channels · mute/solo/pan/level controls</span></div><div class="mixer-desk-grid">${rows}</div>`;
+    return `<div class="workspace-toolbar"><label class="control-label compact"><span>Master</span><output data-control-readout>${this.escapeHtml(this.mixerState.masterVolume)}</output><input data-module-input="master-volume" type="range" min="0" max="1" step="0.01" value="${this.escapeHtml(this.mixerState.masterVolume)}" aria-label="Master volume"></label><div class="performance-meter mixer-master-meter" data-master-meter aria-label="Master peak and RMS meter"><span class="performance-meter-rms"></span><span class="performance-meter-peak"></span><span class="performance-meter-clip">CLIP</span></div><button type="button" data-module-action="unsolo-all">UNSOLO ALL</button><span class="microcopy">${strips.length} channels · mute/solo/pan/level · live master peak/RMS</span></div><div class="mixer-desk-grid">${rows}</div>`;
   }
 
   syncControlReadout(input) {

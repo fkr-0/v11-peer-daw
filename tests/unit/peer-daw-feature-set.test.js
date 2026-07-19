@@ -204,6 +204,34 @@ describe('consolidated V11 peer DAW catalog', () => {
     expect(app).toContain('workspaceViewMetadata');
   });
 
+  test('studio performance monitor exposes live master metering and low-power controls', () => {
+    const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+    const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');
+    const audio = readFileSync(new URL('../../src/core/audio.js', import.meta.url), 'utf8');
+    const monitor = readFileSync(
+      new URL('../../src/ui/performance-monitor.js', import.meta.url),
+      'utf8'
+    );
+
+    for (const id of [
+      'performanceMonitor',
+      'performanceState',
+      'performancePeak',
+      'performanceRms',
+      'performanceLatency',
+      'performanceEngine',
+      'btnPerformanceMode',
+    ]) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    expect(html.match(/data-master-meter/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(app).toContain('new PerformanceMonitor');
+    expect(audio).toContain('getMeterSnapshot');
+    expect(audio).toContain('getPerformanceSnapshot');
+    expect(monitor).toContain('v11-peer-daw-low-power-mode');
+    expect(monitor).toContain('visibilitychange');
+  });
+
   test('collaboration confidence exposes protocol v2 operations and Sync Center recovery UI', () => {
     const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
     const app = readFileSync(new URL('../../src/app.js', import.meta.url), 'utf8');

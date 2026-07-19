@@ -268,6 +268,26 @@
             <div class="event-log" id="eventLog"></div>
           </div>
         </details>
+
+        <details class="inspector-drawer ui-drawer" data-drawer-key="Performance" open>
+          <summary><span>Performance</span><span id="performanceState" class="summary-meta">offline</span></summary>
+          <div class="inspector-drawer-body">
+            <div id="performanceMonitor" class="performance-monitor" aria-live="polite">
+              <div class="performance-meter" data-master-meter>
+                <span class="performance-meter-rms"></span>
+                <span class="performance-meter-peak"></span>
+                <span class="performance-meter-clip">CLIP</span>
+              </div>
+              <div class="performance-readouts">
+                <span><small>PEAK</small><strong id="performancePeak">−∞ dB</strong></span>
+                <span><small>RMS</small><strong id="performanceRms">−∞ dB</strong></span>
+                <span><small>LATENCY</small><strong id="performanceLatency">offline</strong></span>
+                <span><small>ENGINE</small><strong id="performanceEngine">0 Hz</strong></span>
+              </div>
+              <button id="btnPerformanceMode" class="mini-button performance-mode-button" type="button" aria-pressed="false">LOW-POWER MODE OFF</button>
+            </div>
+          </div>
+        </details>
       </aside>
     </section>
 
@@ -285,6 +305,11 @@
       <div class="transport-stats">
         <span id="transportModules">0 modules</span>
         <span id="transportRoutes">0 routes</span>
+      </div>
+      <div class="transport-meter" data-master-meter aria-label="Master output meter">
+        <span class="performance-meter-rms"></span>
+        <span class="performance-meter-peak"></span>
+        <span class="performance-meter-clip">CLIP</span>
       </div>
       <a class="transport-docs" href="./docs/ARCHITECTURE.md">docs</a>
     </footer>

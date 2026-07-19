@@ -4,6 +4,29 @@ All notable changes to V11 Peer DAW are documented here. The project follows
 [Semantic Versioning](https://semver.org/) and the structure of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.0] - 2026-07-19
+
+### Added
+
+- Live master peak and RMS metering in the transport bar, performance inspector, and Mixer workspace.
+- Clip-hold indication, decibel readouts, audio-context state, sample-rate, analyser-size, and output-latency diagnostics.
+- A persistent low-power monitoring mode that reduces visual telemetry frequency without changing audio scheduling.
+- A dedicated `PerformanceMonitor` UI service with visibility-aware animation-frame scheduling.
+- Unit and browser coverage for meter calculations, clipping, latency formatting, low-power persistence, and Mixer integration.
+
+### Changed
+
+- The master analyser now uses a 1024-sample time-domain window with controlled smoothing.
+- Master-volume writes are clamped to the supported gain range before scheduling.
+- Performance telemetry pauses while the document is hidden and resumes when the studio becomes visible.
+- The transport bar adapts its statistics and meter footprint on narrow screens.
+
+### Fixed
+
+- Studio performance could previously be inspected only indirectly through browser tools and packet diagnostics.
+- Repeated hidden-tab meter work no longer consumes animation frames unnecessarily.
+- Master levels above the supported runtime range can no longer be scheduled accidentally.
+
 ## [1.4.0] - 2026-07-14
 
 ### Added
